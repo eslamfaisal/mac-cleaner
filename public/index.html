@@ -11,7 +11,7 @@
 <body>
 
 <header class="topbar">
-  <div class="brand"><span class="brand-icon">🧹</span> <span>Mac Cleaner</span></div>
+  <div class="brand"><span class="brand-icon">🧹</span> <span>Mac Cleaner</span> <span class="ver muted" id="app-version"></span></div>
   <div class="disk" id="disk-gauge" title="">
     <div class="disk-bar">
       <div class="disk-used" id="disk-used"></div>
@@ -20,6 +20,7 @@
     <div class="disk-label" id="disk-label">—</div>
   </div>
   <div class="reclaimed" id="reclaimed" title="Space freed this session">♻️ 0 B</div>
+  <button class="icon-btn fda-lock" id="fda-lock" hidden title="Full Disk Access not granted — click for setup steps">🔒</button>
   <div class="mode-toggle" id="mode-toggle" role="radiogroup" aria-label="Delete mode">
     <button data-mode="trash" aria-checked="false">Move to Trash</button>
     <button data-mode="rm" aria-checked="true">Delete permanently</button>
@@ -32,11 +33,22 @@
   <div class="progress-text"><span id="progress-count">0 / 0</span> <span class="walk-dir" id="walk-dir"></span></div>
 </div>
 
-<div class="banner" id="fda-banner" hidden>
-  <span>🔒 Some locations (Safari cache, device backups, Mail…) need <b>Full Disk Access</b>.
-  macOS cannot prompt for it — add the app running this server (Claude / Terminal) in the pane,
-  relaunch it, then rescan.</span>
-  <button class="btn" id="fda-open">Open Full Disk Access settings</button>
+<div class="onboard" id="fda-card" hidden>
+  <div class="onboard-head">
+    <span class="onboard-icon">🔐</span>
+    <div class="onboard-title">
+      <b>Unlock full scanning with Full Disk Access</b>
+      <div class="muted">Safari cache, Mail, device backups and parts of System Data are invisible without it.
+      macOS cannot prompt for this permission — it takes three quick steps:</div>
+    </div>
+    <button class="icon-btn" id="fda-dismiss" title="Dismiss">✕</button>
+  </div>
+  <ol class="onboard-steps">
+    <li><button class="btn" id="fda-open">Open Full Disk Access settings</button></li>
+    <li>Turn on <b id="fda-target">your terminal app</b> in the list (add it with “+” if missing)</li>
+    <li>Watch this flip: <span class="fda-pill waiting" id="fda-pill"><span class="spinner"></span> waiting for permission…</span>
+        <span class="muted" id="fda-hint">If it stays orange after enabling, quit &amp; relaunch, then rescan.</span></li>
+  </ol>
 </div>
 
 <main>
@@ -82,19 +94,19 @@
     <button class="btn" id="select-none">Clear selection</button>
   </section>
 
-  <section id="groups"></section>
+  <section class="cards" id="cards" hidden></section>
+
+  <section id="detail" hidden>
+    <div class="detail-header">
+      <button class="btn" id="detail-back">← All categories</button>
+    </div>
+    <div id="groups"></div>
+  </section>
 
   <section class="commands" id="commands" hidden>
     <h2>Suggested terminal commands</h2>
     <p class="muted">These are cleaned best with their own tools — copy and run in your terminal.</p>
     <div class="cmd-grid" id="cmd-grid"></div>
-  </section>
-
-  <section class="coverage" id="coverage" hidden>
-    <h2>Scan coverage</h2>
-    <p class="muted">Every category this scan checked — mobile, web, backend, game and ML tooling.
-       Empty categories mean nothing was found on this Mac.</p>
-    <div class="coverage-grid" id="coverage-grid"></div>
   </section>
 </main>
 

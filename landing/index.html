@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mac Cleaner — open-source disk cleanup for developers</title>
+<meta name="description" content="Free, open-source Mac disk cleaner for developers. Scans Xcode, Gradle, Flutter, npm, Docker caches and System Data. 100% local, zero dependencies, nothing deleted without you.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧹</text></svg>">
+<style>
+  :root {
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232322;
+    --ink: #ffffff; --ink-2: #c3c2b7; --ink-3: #898781;
+    --border: rgba(255,255,255,.10); --accent: #3987e5;
+    --safe: #0ca30c; --caution: #fab219; --risky: #d03b3b;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+  h1, h2, h3 { font-weight: 700; line-height: 1.2; }
+  .muted { color: var(--ink-3); }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  }
+  code { padding: 2px 7px; }
+  pre { padding: 14px 16px; overflow-x: auto; }
+  pre code { background: none; border: 0; padding: 0; }
+
+  /* nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--page) 86%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 22px; padding: 13px 24px; max-width: 1060px; margin: 0 auto; }
+  .nav-brand { font-weight: 700; font-size: 17px; display: flex; align-items: center; gap: 8px; color: var(--ink); }
+  .nav-links { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  .nav-links a { color: var(--ink-2); }
+  .nav-links a:hover { color: var(--ink); text-decoration: none; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface-2); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 18px; font-weight: 600; font-size: 14.5px; white-space: nowrap;
+  }
+  .btn:hover { background: #2c2c2a; text-decoration: none; }
+  .btn-primary { background: var(--accent); border-color: transparent; }
+  .btn-primary:hover { background: #2a78d6; }
+  .btn-lg { padding: 13px 26px; font-size: 16.5px; border-radius: 12px; }
+
+  /* hero */
+  .hero { text-align: center; padding: 84px 0 40px; }
+  .hero h1 { font-size: clamp(30px, 5.4vw, 50px); max-width: 780px; margin: 0 auto 16px; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero p { color: var(--ink-2); max-width: 620px; margin: 0 auto 30px; font-size: 17.5px; }
+  .hero-ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; align-items: center; }
+  .hero-sub { margin-top: 12px; font-size: 13px; color: var(--ink-3); }
+  .hero-src { margin: 34px auto 0; max-width: 560px; text-align: left; }
+  .hero-src .lbl { font-size: 12.5px; color: var(--ink-3); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .06em; }
+
+  /* mock window */
+  .mock { max-width: 900px; margin: 56px auto 0; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; background: var(--surface); box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .mock-bar { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .mock-bar i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .mock-bar i:nth-child(1){background:#ff5f57} .mock-bar i:nth-child(2){background:#febc2e} .mock-bar i:nth-child(3){background:#28c840}
+  .mock-bar span { margin-left: 8px; font-size: 12px; color: var(--ink-3); }
+  .mock-body { padding: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .mcard { background: var(--page); border: 1px solid var(--border); border-radius: 12px; padding: 12px; border-top: 3px solid var(--mc, var(--accent)); text-align: left; }
+  .mcard .t { font-size: 12px; color: var(--ink-2); display: flex; gap: 6px; align-items: center; }
+  .mcard .v { font-size: 18px; font-weight: 700; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
+  .mbar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--surface-2); }
+  .mbar i { display: block; }
+  .mbar .s { background: var(--safe); } .mbar .c { background: var(--caution); } .mbar .r { background: var(--risky); }
+
+  section { padding: 74px 0 10px; }
+  .sec-h { font-size: clamp(24px, 3.4vw, 32px); margin-bottom: 10px; }
+  .sec-p { color: var(--ink-2); max-width: 640px; margin-bottom: 34px; }
+
+  /* features */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .feat { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
+  .feat .ico { font-size: 24px; }
+  .feat h3 { font-size: 16.5px; margin: 10px 0 6px; }
+  .feat p { font-size: 14px; color: var(--ink-2); }
+
+  /* security */
+  .sec-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; }
+  .sec-list { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 26px; }
+  .sec-list li { padding-left: 28px; position: relative; font-size: 14.5px; color: var(--ink-2); }
+  .sec-list li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--safe); font-weight: 700; }
+  .sec-list b { color: var(--ink); }
+  .pill-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 22px; }
+  .pill { border: 1px solid var(--border); border-radius: 999px; padding: 4px 14px; font-size: 12.5px; }
+  .pill.safe { color: var(--safe); border-color: color-mix(in srgb, var(--safe) 50%, transparent); }
+  .pill.caution { color: var(--caution); border-color: color-mix(in srgb, var(--caution) 50%, transparent); }
+  .pill.risky { color: var(--risky); border-color: color-mix(in srgb, var(--risky) 55%, transparent); }
+
+  /* faq */
+  details { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin-bottom: 10px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+  details p { margin-top: 10px; font-size: 14.5px; color: var(--ink-2); }
+  details pre { margin-top: 10px; }
+
+  /* download strip */
+  .dl { text-align: center; padding: 80px 0 60px; }
+  .dl .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 26px; }
+
+  footer { border-top: 1px solid var(--border); padding: 26px 0 40px; font-size: 13.5px; color: var(--ink-3); }
+  .foot { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  .foot .sp { flex: 1; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .hero > *, .mock { animation: rise .5s ease-out backwards; }
+    .mock { animation-delay: .15s; }
+    .feat { transition: transform .15s ease, border-color .15s ease; }
+    .feat:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-brand" href="#">🧹 Mac Cleaner</a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#security">Security</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/eslamfaisal/mac-cleaner">GitHub</a>
+    </div>
+    <a class="btn btn-primary" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg">⬇ Download</a>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <h1>Find what is eating your disk.<br><em>Delete only what you choose.</em></h1>
+  <p>An open-source Mac cleanup dashboard built for developers — Xcode, Gradle, Flutter, npm,
+     Docker, System Data and 20+ more categories, classified by safety.
+     100% local, zero dependencies, nothing leaves your machine.</p>
+  <div class="hero-ctas">
+    <a class="btn btn-primary btn-lg" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg">⬇ Download for macOS</a>
+    <a class="btn btn-lg" href="https://github.com/eslamfaisal/mac-cleaner">View source on GitHub</a>
+  </div>
+  <div class="hero-sub">Free & open source · Apple Silicon · macOS 12+ · no account, no telemetry</div>
+
+  <div class="mock" aria-hidden="true">
+    <div class="mock-bar"><i></i><i></i><i></i><span>Mac Cleaner — 220 GB cleanable found</span></div>
+    <div class="mock-body">
+      <div class="mcard" style="--mc:#3987e5"><div class="t">🔨 Xcode &amp; iOS</div><div class="v">54.7 GB</div><div class="mbar"><i class="s" style="width:55%"></i><i class="c" style="width:35%"></i><i class="r" style="width:10%"></i></div></div>
+      <div class="mcard" style="--mc:#199e70"><div class="t">🤖 Android &amp; JVM</div><div class="v">59.3 GB</div><div class="mbar"><i class="s" style="width:40%"></i><i class="c" style="width:45%"></i><i class="r" style="width:15%"></i></div></div>
+      <div class="mcard" style="--mc:#c98500"><div class="t">🗄️ System Data</div><div class="v">14.1 GB</div><div class="mbar"><i class="s" style="width:10%"></i><i class="c" style="width:90%"></i></div></div>
+      <div class="mcard" style="--mc:#9085e9"><div class="t">📦 Build Artifacts</div><div class="v">48.2 GB</div><div class="mbar"><i class="s" style="width:80%"></i><i class="c" style="width:20%"></i></div></div>
+      <div class="mcard" style="--mc:#d55181"><div class="t">🐳 Docker &amp; VMs</div><div class="v">1.43 GB</div><div class="mbar"><i class="r" style="width:100%"></i></div></div>
+      <div class="mcard" style="--mc:#e66767"><div class="t">🧰 App Caches</div><div class="v">12.8 GB</div><div class="mbar"><i class="s" style="width:70%"></i><i class="c" style="width:30%"></i></div></div>
+    </div>
+  </div>
+</header>
+
+<section id="features" class="wrap">
+  <h2 class="sec-h">Built for developer machines</h2>
+  <p class="sec-p">Dev machines fill up with gigabytes of regenerable cache. Mac Cleaner scans
+     all of it in one pass and tells you what is safe to remove, why, and how it comes back.</p>
+  <div class="grid">
+    <div class="feat"><span class="ico">⚡️</span><h3>Fast parallel scanning</h3>
+      <p>A worker-thread pool walks your home directory concurrently; results stream in live over
+         Server-Sent Events — review while it scans.</p></div>
+    <div class="feat"><span class="ico">🚦</span><h3>Safety-classified, always manual</h3>
+      <p>Every item is <b>safe</b>, <b>caution</b> or <b>risky</b> — with the reason and the regeneration
+         path. Nothing is ever deleted automatically, and risky items need explicit acknowledgment.</p></div>
+    <div class="feat"><span class="ico">🗄️</span><h3>System Data, explained</h3>
+      <p>The mystery bar in macOS Storage: old iOS device updates, Time Machine local snapshots,
+         system caches, update payloads, diagnostic reports — sized and explained, with the exact
+         terminal command when root is required.</p></div>
+    <div class="feat"><span class="ico">🧠</span><h3>Smart cross-checks</h3>
+      <p>Gradle/NDK versions pinned by your real projects are flagged, orphaned iOS simulators
+         detected, recently-touched projects get an <b>active project</b> badge so you don't nuke
+         work in progress.</p></div>
+    <div class="feat"><span class="ico">📦</span><h3>Project artifact walker</h3>
+      <p><code>node_modules</code>, <code>build</code>, <code>.next</code>, <code>Pods</code>,
+         <code>target</code>, <code>.venv</code> and ~25 more patterns, clustered per project and
+         gated on sibling files to avoid false positives.</p></div>
+    <div class="feat"><span class="ico">🖥️</span><h3>App and dashboard</h3>
+      <p>Use it as a native Mac app (DMG download) or run the same code as a local web dashboard
+         with <code>npm start</code> — one codebase, zero dependencies either way.</p></div>
+  </div>
+</section>
+
+<section id="security" class="wrap">
+  <h2 class="sec-h">Security is the whole point</h2>
+  <p class="sec-p">A cleanup tool can delete files, so this one is deliberately paranoid —
+     and open source, so you can verify every claim below.</p>
+  <div class="sec-card">
+    <div class="pill-row">
+      <span class="pill safe">safe — pure cache, regenerates</span>
+      <span class="pill caution">caution — costs time to rebuild</span>
+      <span class="pill risky">risky — real data loss possible</span>
+    </div>
+    <ul class="sec-list">
+      <li><b>100% local.</b> Binds 127.0.0.1 only — never reachable from the network, no accounts, no telemetry, nothing uploaded.</li>
+      <li><b>Per-boot token.</b> Every mutating request needs a random token injected into the served page — other sites and scripts can't forge a delete.</li>
+      <li><b>DNS-rebinding &amp; CSRF defense.</b> Host and Origin headers are validated on every request.</li>
+      <li><b>Path validation chain.</b> Only scanner-registered paths are deletable — allow-listed roots, banned-path set (Documents, Keychains, …), minimum depth, realpath + symlink re-check at delete time.</li>
+      <li><b>Root-owned = read-only.</b> System paths are displayed with sizes but never deletable from the UI; you get the exact terminal command instead.</li>
+      <li><b>Trash-first option.</b> Default flow can move to Trash (restorable) instead of permanent deletion; risky items always require an explicit checkbox.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="faq" class="wrap">
+  <h2 class="sec-h">FAQ</h2>
+  <details open>
+    <summary>macOS says the app "cannot be opened" — why?</summary>
+    <p>Downloads are currently ad-hoc signed (no paid Apple Developer certificate), so Gatekeeper
+       shows a warning on first launch. Right-click the app → <b>Open</b> → <b>Open</b> once; after
+       that it opens normally. Or remove the quarantine flag yourself:</p>
+    <pre><code>xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"</code></pre>
+    <p>You can also skip the download entirely and run from source (below) — same code.</p>
+  </details>
+  <details>
+    <summary>Why does it ask for Full Disk Access?</summary>
+    <p>Some locations (Safari cache, Mail, device backups, parts of System Data) are invisible
+       without it. macOS can't prompt for this permission, so the app walks you through the
+       three-step grant and detects it live. It's optional — everything else scans fine without it.</p>
+  </details>
+  <details>
+    <summary>Can I run it without installing anything?</summary>
+    <p>Yes — it's a zero-dependency Node app (built-ins only, no <code>npm install</code>):</p>
+    <pre><code>git clone https://github.com/eslamfaisal/mac-cleaner.git
+cd mac-cleaner
+npm start   # → http://127.0.0.1:4545</code></pre>
+  </details>
+  <details>
+    <summary>Will it ever delete something by itself?</summary>
+    <p>No. Scanning is read-only. Deletion happens only for items you selected, after a
+       confirmation dialog, with a second server-side validation pass — and risky items require
+       an extra explicit acknowledgment.</p>
+  </details>
+  <details>
+    <summary>Intel Mac?</summary>
+    <p>The prebuilt DMG is Apple Silicon. On Intel, run from source, or build the app yourself
+       with <code>NODE_BIN</code> pointing at an x64 Node: <code>./build-app.sh</code>.</p>
+  </details>
+</section>
+
+<section class="dl wrap" id="download">
+  <h2 class="sec-h">Free. Open source. Yours.</h2>
+  <p class="sec-p" style="margin:0 auto">Download the app, or read every line first — both are the same code.</p>
+  <div class="btns">
+    <a class="btn btn-primary btn-lg" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg">⬇ Download Mac Cleaner.dmg</a>
+    <a class="btn btn-lg" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest">All releases</a>
+    <a class="btn btn-lg" href="https://github.com/eslamfaisal/mac-cleaner">Star on GitHub ★</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <span>🧹 Mac Cleaner</span>
+    <span class="sp"></span>
+    <a href="https://github.com/eslamfaisal/mac-cleaner">GitHub</a>
+    <a href="https://github.com/eslamfaisal/mac-cleaner/issues">Issues</a>
+    <a href="https://github.com/eslamfaisal/mac-cleaner/releases/latest">Releases</a>
+  </div>
+</footer>
+
+</body>
+</html>

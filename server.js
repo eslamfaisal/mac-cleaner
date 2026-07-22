@@ -18,11 +18,16 @@ import { fileURLToPath } from 'node:url';
 import { Scanner, GROUPS, HOME } from './lib/scanner.js';
 import { SUGGESTED_COMMANDS } from './lib/categories.js';
 
-const PORT = Number(process.env.PORT || 4545);
+// PORT=0 asks the OS for an ephemeral port (used by the .app wrapper, which
+// reads the LISTENING line from stdout). boundPort is the real port once bound.
+const PORT = Number(process.env.PORT ?? 4545);
+let boundPort = PORT;
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUB = path.join(ROOT, 'public');
 const TOKEN = crypto.randomBytes(16).toString('hex');
 const BOOT_ID = crypto.randomBytes(8).toString('hex');
+let APP_VERSION = 'dev';
+try { APP_VERSION = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim(); } catch {}
 
 const scanner = new Scanner();
 let reclaimedBytes = 0;
@@ -73,7 +78,7 @@ function publicItem(i) {
   return {
     id: i.id, group: i.group, name: i.name, display: i.display, safety: i.safety,
     why: i.why, regen: i.regen, kind: i.kind, deleteMode: i.deleteMode,
-    permanentOnly: i.permanentOnly, displayOnly: i.displayOnly, badges: i.badges,
+    permanentOnly: i.permanentOnly, displayOnly: i.displayOnly, needs: i.needs || null, badges: i.badges,
     status: i.status, bytes: i.bytes, files: i.files, denied: i.denied,
     error: i.error || null, mtime: i.mtime || null,
     project: i.project ? (i.project.startsWith(HOME) ? '~' + i.project.slice(HOME.length) : i.project) : null,
@@ -93,6 +98,8 @@ function snapshot() {
     home: HOME,
     bootId: BOOT_ID,
     fda: fdaGranted(),
+    appMode: !!process.env.APP_MODE,
+    version: APP_VERSION,
   };
 }
 
@@ -100,14 +107,29 @@ function snapshot() {
 
 // macOS has no programmatic prompt for Full Disk Access — the best an app can
 // do is detect it's missing and deep-link the user to the settings pane.
+// Several probe paths reduce false negatives on machines without Safari data.
+const FDA_PROBES = [
+  path.join(HOME, 'Library/Safari'),
+  path.join(HOME, 'Library/Mail'),
+  path.join(HOME, 'Library/Application Support/MobileSync/Backup'),
+];
+
 function fdaGranted() {
-  try {
-    fs.readdirSync(path.join(HOME, 'Library/Safari'));
-    return true;
-  } catch (e) {
-    return e.code === 'ENOENT'; // dir absent = can't tell, assume fine
+  let sawDenied = false;
+  for (const p of FDA_PROBES) {
+    try { fs.readdirSync(p); return true; }
+    catch (e) { if (e.code !== 'ENOENT') sawDenied = true; }
   }
+  return !sawDenied; // every probe absent = can't tell, assume fine
 }
+
+// Live re-probe: the settings pane grant takes effect for this running
+// process, so the UI pill can flip to "granted" without a restart.
+let fdaLast = null;
+setInterval(() => {
+  const g = fdaGranted();
+  if (g !== fdaLast) { fdaLast = g; broadcast('fda', { granted: g }); }
+}, 3000);
 
 // ------------------------------------------------------------- disk -------
 
@@ -180,7 +202,7 @@ function enqueueDelete(ids, mode) {
   const accepted = [];
   for (const id of ids) {
     const item = scanner.items.get(id);
-    if (!item || ['deleting', 'deleted', 'gone', 'missing'].includes(item.status)) continue;
+    if (!item || item.displayOnly || ['deleting', 'deleted', 'gone', 'missing'].includes(item.status)) continue;
     item.status = 'queued';
     dirtyItems.set(item.id, item);
     deleteQueue.push({ item, mode });
@@ -310,13 +332,13 @@ const STATIC = {
 
 function hostOk(req) {
   const host = String(req.headers.host || '');
-  return host === `127.0.0.1:${PORT}` || host === `localhost:${PORT}`;
+  return host === `127.0.0.1:${boundPort}` || host === `localhost:${boundPort}`;
 }
 
 function originOk(req) {
   const origin = req.headers.origin;
   if (!origin) return true;
-  return origin === `http://127.0.0.1:${PORT}` || origin === `http://localhost:${PORT}`;
+  return origin === `http://127.0.0.1:${boundPort}` || origin === `http://localhost:${boundPort}`;
 }
 
 function readBody(req) {
@@ -343,7 +365,7 @@ function json(res, code, obj) {
 
 const server = http.createServer(async (req, res) => {
   if (!hostOk(req) || !originOk(req)) { json(res, 403, { error: 'forbidden' }); return; }
-  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  const url = new URL(req.url, `http://127.0.0.1:${boundPort}`);
 
   // ---- static ----
   if (req.method === 'GET' && STATIC[url.pathname]) {
@@ -426,6 +448,8 @@ const server = http.createServer(async (req, res) => {
 
 refreshDisk();
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Mac Cleaner dashboard → http://127.0.0.1:${PORT}`);
+  boundPort = server.address().port;
+  console.log(`LISTENING ${boundPort}`);
+  console.log(`Mac Cleaner dashboard → http://127.0.0.1:${boundPort}`);
   console.log(`Grant Full Disk Access to your terminal for complete results.`);
 });
