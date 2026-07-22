@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="620" viewBox="0 0 1000 620" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <linearGradient id="disk" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8a887f"/><stop offset="0.58" stop-color="#8a887f"/>
+      <stop offset="0.58" stop-color="#3987e5"/><stop offset="0.86" stop-color="#3987e5"/>
+      <stop offset="0.86" stop-color="#2c2c2a"/><stop offset="1" stop-color="#2c2c2a"/>
+    </linearGradient>
+    <style>
+      .t  { fill:#ffffff; } .m { fill:#898781; } .m2 { fill:#c3c2b7; }
+      .big{ font-weight:700; } .lbl{ font-size:12px; } .val{ font-size:21px; font-weight:700; }
+    </style>
+  </defs>
+
+  <!-- window -->
+  <rect x="0" y="0" width="1000" height="620" rx="16" fill="#0d0d0d"/>
+  <rect x="0.5" y="0.5" width="999" height="619" rx="16" fill="none" stroke="rgba(255,255,255,0.10)"/>
+
+  <!-- title bar -->
+  <g>
+    <circle cx="26" cy="26" r="6" fill="#ff5f57"/><circle cx="46" cy="26" r="6" fill="#febc2e"/><circle cx="66" cy="26" r="6" fill="#28c840"/>
+    <text x="96" y="31" class="t big" font-size="15">🧹 Mac Cleaner</text>
+    <text x="232" y="31" class="m" font-size="12">v1.1.0</text>
+    <!-- disk gauge -->
+    <rect x="330" y="20" width="330" height="8" rx="4" fill="url(#disk)"/>
+    <text x="330" y="44" class="m" font-size="11">377 GB used · 83.9 GB free · 220 GB cleanable found</text>
+    <text x="690" y="31" fill="#0ca30c" font-size="13" font-weight="600">♻ 0 B</text>
+    <!-- mode toggle -->
+    <rect x="762" y="15" width="130" height="26" rx="7" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+    <rect x="828" y="15" width="64" height="26" rx="7" fill="#232322"/>
+    <text x="772" y="32" class="m" font-size="11">Trash</text>
+    <text x="838" y="32" class="t" font-size="11" font-weight="600">Delete</text>
+    <rect x="904" y="13" width="82" height="30" rx="8" fill="#3987e5"/>
+    <text x="922" y="32" class="t" font-size="13" font-weight="650">Rescan</text>
+  </g>
+  <line x1="0" y1="56" x2="1000" y2="56" stroke="rgba(255,255,255,0.10)"/>
+
+  <!-- summary tiles -->
+  <g transform="translate(24,74)">
+    <g>
+      <rect width="222" height="66" rx="12" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+      <text x="16" y="34" class="t val">220 GB</text><text x="16" y="52" class="m lbl">cleanable found</text>
+    </g>
+    <g transform="translate(234,0)">
+      <rect width="222" height="66" rx="12" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+      <text x="16" y="34" class="t val">101 GB</text><circle cx="20" cy="49" r="4" fill="#0ca30c"/><text x="30" y="53" class="m lbl">safe</text>
+    </g>
+    <g transform="translate(468,0)">
+      <rect width="222" height="66" rx="12" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+      <text x="16" y="34" class="t val">107 GB</text><circle cx="20" cy="49" r="4" fill="#fab219"/><text x="30" y="53" class="m lbl">caution</text>
+    </g>
+    <g transform="translate(702,0)">
+      <rect width="250" height="66" rx="12" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+      <text x="16" y="34" class="t val">12.5 GB</text><circle cx="20" cy="49" r="4" fill="#d03b3b"/><text x="30" y="53" class="m lbl">risky</text>
+    </g>
+  </g>
+
+  <!-- category cards grid -->
+  <g transform="translate(24,160)" font-size="13">
+    <!-- row 1 -->
+    <g transform="translate(0,0)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#55544f"/>
+      <text x="16" y="28" class="t">🗑️ Trash</text><text x="16" y="58" class="t big" font-size="19">196 MB</text>
+      <text x="16" y="76" class="m" font-size="11">1 item</text>
+      <rect x="16" y="82" width="190" height="4" rx="2" fill="#0ca30c"/>
+    </g>
+    <g transform="translate(234,0)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#c98500"/>
+      <text x="16" y="28" class="t">🗄️ System Data</text><text x="16" y="58" class="t big" font-size="19">14.3 GB</text>
+      <text x="16" y="76" class="m" font-size="11">8 items · 5 read-only · 🔒 1</text>
+      <rect x="16" y="82" width="20" height="4" rx="2" fill="#0ca30c"/><rect x="36" y="82" width="170" height="4" fill="#fab219"/>
+    </g>
+    <g transform="translate(468,0)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#199e70"/>
+      <text x="16" y="28" class="t">🔨 Xcode &amp; iOS</text><text x="16" y="58" class="t big" font-size="19">54.7 GB</text>
+      <text x="16" y="76" class="m" font-size="11">61 items · 1 read-only</text>
+      <rect x="16" y="82" width="104" height="4" rx="2" fill="#0ca30c"/><rect x="120" y="82" width="66" height="4" fill="#fab219"/><rect x="186" y="82" width="20" height="4" fill="#d03b3b"/>
+    </g>
+    <g transform="translate(702,0)">
+      <rect width="250" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="250" height="3" rx="1.5" fill="#3987e5"/>
+      <text x="16" y="28" class="t">🤖 Android &amp; JVM</text><text x="16" y="58" class="t big" font-size="19">59.3 GB</text>
+      <text x="16" y="76" class="m" font-size="11">42 items</text>
+      <rect x="16" y="82" width="90" height="4" rx="2" fill="#0ca30c"/><rect x="106" y="82" width="100" height="4" fill="#fab219"/><rect x="206" y="82" width="28" height="4" fill="#d03b3b"/>
+    </g>
+    <!-- row 2 -->
+    <g transform="translate(0,112)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#9085e9"/>
+      <text x="16" y="28" class="t">📦 Build Artifacts</text><text x="16" y="58" class="t big" font-size="19">48.3 GB</text>
+      <text x="16" y="76" class="m" font-size="11">37 items</text>
+      <rect x="16" y="82" width="160" height="4" rx="2" fill="#0ca30c"/><rect x="176" y="82" width="30" height="4" fill="#fab219"/>
+    </g>
+    <g transform="translate(234,112)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#e66767"/>
+      <text x="16" y="28" class="t">🧰 App Caches &amp; Data</text><text x="16" y="58" class="t big" font-size="19">12.9 GB</text>
+      <text x="16" y="76" class="m" font-size="11">35 items</text>
+      <rect x="16" y="82" width="150" height="4" rx="2" fill="#0ca30c"/><rect x="166" y="82" width="40" height="4" fill="#fab219"/>
+    </g>
+    <g transform="translate(468,112)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#d55181"/>
+      <text x="16" y="28" class="t">🐳 Docker &amp; VMs</text><text x="16" y="58" class="t big" font-size="19">1.43 GB</text>
+      <text x="16" y="76" class="m" font-size="11">1 item</text>
+      <rect x="16" y="82" width="190" height="4" rx="2" fill="#d03b3b"/>
+    </g>
+    <g transform="translate(702,112)">
+      <rect width="250" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="250" height="3" rx="1.5" fill="#008300"/>
+      <text x="16" y="28" class="t">🐦 Flutter &amp; Dart</text><text x="16" y="58" class="t big" font-size="19">8.32 GB</text>
+      <text x="16" y="76" class="m" font-size="11">3 items</text>
+      <rect x="16" y="82" width="150" height="4" rx="2" fill="#0ca30c"/><rect x="166" y="82" width="68" height="4" fill="#fab219"/>
+    </g>
+    <!-- row 3 -->
+    <g transform="translate(0,224)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#d95926"/>
+      <text x="16" y="28" class="t">📝 IDEs &amp; Editors</text><text x="16" y="58" class="t big" font-size="19">10.2 GB</text>
+      <text x="16" y="76" class="m" font-size="11">23 items</text>
+      <rect x="16" y="82" width="120" height="4" rx="2" fill="#0ca30c"/><rect x="136" y="82" width="70" height="4" fill="#fab219"/>
+    </g>
+    <g transform="translate(234,224)">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#3987e5"/>
+      <text x="16" y="28" class="t">🌐 Browsers</text><text x="16" y="58" class="t big" font-size="19">231 MB</text>
+      <text x="16" y="76" class="m" font-size="11">23 items</text>
+      <rect x="16" y="82" width="170" height="4" rx="2" fill="#0ca30c"/><rect x="186" y="82" width="20" height="4" fill="#fab219"/>
+    </g>
+    <g transform="translate(468,224)" opacity="0.4">
+      <rect width="222" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="222" height="3" rx="1.5" fill="#55544f"/>
+      <text x="16" y="28" class="t">🎮 Game Engines</text><text x="16" y="58" class="m big" font-size="19">—</text>
+      <text x="16" y="76" class="m" font-size="11">nothing found</text>
+    </g>
+    <g transform="translate(702,224)">
+      <rect width="250" height="96" rx="14" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/><rect width="250" height="3" rx="1.5" fill="#c98500"/>
+      <text x="16" y="28" class="t">🧠 AI &amp; ML</text><text x="16" y="58" class="t big" font-size="19">87.4 MB</text>
+      <text x="16" y="76" class="m" font-size="11">1 item</text>
+      <rect x="16" y="82" width="120" height="4" rx="2" fill="#0ca30c"/><rect x="136" y="82" width="98" height="4" fill="#fab219"/>
+    </g>
+  </g>
+</svg>

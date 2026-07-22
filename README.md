@@ -1,166 +1,348 @@
-# Mac Cleaner
+<div align="center">
 
-A local, zero-dependency cleanup tool for developer Macs — usable as a **native Mac app**
-(DMG download) or as a **local web dashboard** run from source. It scans Xcode/iOS build
-artifacts, Android/Gradle caches, Flutter/Dart caches, npm/pnpm/yarn stores,
-Python/Go/Rust/Ruby package caches, Docker/VM disks, IDE caches, project build output
-(`node_modules`, `build`, `.next`, `Pods`, …), **System Data** (old device updates, local
-snapshots, system caches, update payloads), large files, stray `.apk`/`.aab`/`.ipa`
-binaries, and installer leftovers — classifies each by safety, and lets you delete manually
-while the scan streams results live over Server-Sent Events.
+# 🧹 Mac Cleaner
 
+**Find what is eating your disk. Delete only what you choose.**
+
+A local, **zero-dependency** disk-cleanup tool for developer Macs — usable as a native
+**Mac app** (`.dmg` download) *or* as a **local web dashboard** run from source.
+It scans developer caches, build artifacts, **System Data**, large files and installer
+leftovers, classifies every item by safety, and lets you delete manually.
 Nothing is ever deleted automatically. You decide what goes.
 
-**Landing page / download:** https://github.com/eslamfaisal/mac-cleaner/releases/latest
+[![Download](https://img.shields.io/badge/⬇_Download-Mac.Cleaner.dmg-3987e5?style=for-the-badge)](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)
+&nbsp;
+![Platform](https://img.shields.io/badge/macOS-12%2B_·_Apple_Silicon-1a1a19?style=for-the-badge)
+&nbsp;
+![License](https://img.shields.io/badge/License-MIT-0ca30c?style=for-the-badge)
+&nbsp;
+![Dependencies](https://img.shields.io/badge/dependencies-zero-0ca30c?style=for-the-badge)
 
-## Install (app)
+<img src="docs/preview.svg" alt="Mac Cleaner — category overview" width="820">
 
-Download `Mac.Cleaner.dmg` from the
-[latest release](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg),
-open it and drag **Mac Cleaner** to Applications.
+</div>
 
-> **Gatekeeper note:** releases are currently ad-hoc signed (no paid Apple Developer
-> certificate), so the first launch needs right-click → **Open** → **Open**, or:
-> `xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"`.
-> Granting **Full Disk Access** to *Mac Cleaner* in System Settings unlocks Safari/Mail/
-> backup scanning — the app walks you through it on first run.
+---
 
-The app is a ~180-line Swift `WKWebView` shell around the exact same Node server — it exists
-so macOS attributes Full Disk Access to "Mac Cleaner" instead of your terminal, and it
-bundles its own Node runtime, so nothing needs to be installed.
+## Table of contents
+
+- [Why](#why)
+- [Highlights](#highlights)
+- [Two ways to run it](#two-ways-to-run-it)
+- [Install the app (DMG)](#install-the-app-dmg)
+- [Full Disk Access](#full-disk-access)
+- [How to use it](#how-to-use-it)
+- [What it scans](#what-it-scans)
+- [System Data — the mystery bar, explained](#system-data--the-mystery-bar-explained)
+- [Safety model](#safety-model)
+- [Security model](#security-model)
+- [Run from source (web dashboard)](#run-from-source-web-dashboard)
+- [Build the app / DMG yourself](#build-the-app--dmg-yourself)
+- [Cutting a release](#cutting-a-release)
+- [Landing page](#landing-page)
+- [Project structure](#project-structure)
+- [How a scan works](#how-a-scan-works)
+- [HTTP API](#http-api)
+- [FAQ & troubleshooting](#faq--troubleshooting)
+- [License](#license)
+
+---
 
 ## Why
 
-Developer machines quietly fill up with gigabytes of regenerable cache: Xcode `DerivedData`,
-Gradle version caches, CocoaPods, `node_modules` scattered across old projects, orphaned
-iOS Simulators, stale Docker images. Mac Cleaner scans all of it in one pass, tells you what
-is safe to remove and why, cross-references pinned versions in your actual projects
-(`gradle-wrapper.properties`, `ndkVersion`) so it doesn't suggest deleting something you still
-need, and gets out of the way for anything it can't safely automate (root-owned system
-caches, `docker system prune`, `simctl`) by surfacing the exact terminal command instead.
+Developer machines quietly fill up with gigabytes of *regenerable* junk: Xcode `DerivedData`,
+Gradle version caches, CocoaPods, `node_modules` scattered across old projects, orphaned iOS
+simulators, stale Docker images, old iOS device software updates, Time Machine local
+snapshots — the stuff that inflates the dreaded **"System Data"** bar in macOS Storage.
 
-## Features
+Mac Cleaner scans all of it in one pass, tells you **what is safe to remove and why**,
+cross-references pinned versions in your *actual* projects (`gradle-wrapper.properties`,
+`ndkVersion`) so it never suggests deleting something you still need, and — for anything a
+tool shouldn't automate (root-owned system caches, `docker system prune`, `simctl`) — it
+surfaces the **exact terminal command** instead of a fake delete button.
 
-- **Fast, parallel scanning** — a worker-thread pool (sized to your CPU) walks your home
-  directory and sizes directories concurrently; results stream in live, no waiting for a
-  full scan to finish before you start reviewing.
-- **Safety-classified** — every item is `safe` (pure cache, regenerates silently), `caution`
-  (re-downloadable/rebuildable, costs time or bandwidth), or `risky` (potential real data
-  loss — device backups, Xcode archives, VM disks, call/meeting recordings). Hover any row
-  to see *why* it's cleanable and *how it comes back*.
-- **Smart cross-checks**:
-  - Orphaned iOS Simulators (runtime deleted, device unusable) via `simctl`.
-  - Gradle cache versions and wrapper distributions flagged as *pinned* when a real
-    project's `gradle-wrapper.properties` still targets that version.
-  - NDK versions flagged as *pinned* when a project's `build.gradle(.kts)` sets that
-    `ndkVersion`.
-  - Android Studio profile versions marked *current* vs *old* by version compare.
-  - Android emulators (AVDs) split into "wipe user data" vs "delete entire emulator."
-  - Recently-touched project directories (mtime < 30 days) get an **active project** badge
-    so you don't nuke something you're mid-way through.
-- **Project build-artifact walker** — recognizes `node_modules`, `build`, `dist`, `.next`,
-  `.nuxt`, `.turbo`, `Pods`, `target`, `.venv`, `__pycache__`, `.terraform`, and ~25 other
-  patterns, gated on sibling files (e.g. `build/` only counts next to `pubspec.yaml` /
-  `gradlew` / `package.json` / etc.) to avoid false positives on generically-named folders.
-- **Large files & binaries** — flags files ≥ 500 MB anywhere in your home directory, and
-  `.apk` / `.aab` / `.ipa` binaries ≥ 5 MB (built artifacts inside build output are
-  distinguished from possibly-archived releases sitting elsewhere).
-- **Manual, granular deletion** — per item, a selected set, or "select all safe." Two modes:
-  **move to Trash** (restorable) or **delete permanently**. Root-owned locations are shown
-  read-only with the equivalent terminal command instead of a broken delete button.
-- **Live disk gauge** — total/free space and reclaimed-so-far, updated after every delete.
-- **Suggested terminal commands** — for things a web UI shouldn't touch directly: Homebrew
-  cleanup, `docker system prune`, orphaned simulator/runtime deletion, Time Machine local
-  snapshots, Go module cache, Conda, CocoaPods.
+## Highlights
 
-## Run from source (web dashboard)
+- 🖥️ **App *and* dashboard, one codebase** — install the `.dmg` or run `npm start`. Same
+  scanner, same UI, same security model.
+- 🗂️ **CleanMyMac-style overview** — a card per category with total size, item count and a
+  safety-split bar; click to drill into the file list.
+- 🚦 **Safety-classified, always manual** — every item is `safe` / `caution` / `risky`,
+  with the reason and the regeneration path. Risky items require an explicit acknowledgment.
+- 🗄️ **System Data insights** — old iOS device updates, Homebrew cache, diagnostic reports,
+  update payloads, Time Machine local snapshots, system caches — sized and explained.
+- ⚡ **Fast parallel scanning** — a worker-thread pool sizes directories concurrently and
+  streams results live over Server-Sent Events. Review while it scans.
+- 🧠 **Smart cross-checks** — pinned Gradle/NDK versions, orphaned simulators, *active
+  project* badges on recently-touched folders so you don't nuke work in progress.
+- 🔒 **Private by design** — binds `127.0.0.1` only, per-boot token, no account, no
+  telemetry, nothing leaves your machine. Fully open source.
+- 📦 **Zero dependencies** — Node built-ins only; no `npm install`. The app bundles its own
+  Node runtime, so end users install nothing.
 
-Requires Node.js (built-ins only — no `npm install` needed).
+## Two ways to run it
 
-```sh
-npm start
-# → http://127.0.0.1:4545
-```
+| | Native app | Web dashboard |
+|---|---|---|
+| **Get it** | [Download the `.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest) | `git clone` + `npm start` |
+| **Installs anything?** | No — bundles its own Node | Needs Node.js (built-ins only) |
+| **Full Disk Access** | Granted to **Mac Cleaner** | Granted to your **terminal app** |
+| **Opens at** | Native window | `http://127.0.0.1:4545` |
+| **Best for** | Everyday use | Developers / auditing the code |
 
-## Build the app / DMG
+Both run the identical local server. The app is just a ~180-line Swift `WKWebView` shell —
+it exists so macOS attributes Full Disk Access to *"Mac Cleaner"* instead of your terminal.
 
-Requires Xcode (for `swiftc`); everything else is stock macOS tooling.
+## Install the app (DMG)
 
-```sh
-./build-app.sh
-# → dist/Mac Cleaner.app + dist/Mac.Cleaner.dmg
-```
+1. **Download** [`Mac.Cleaner.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)
+   from the latest release.
+2. **Open** the `.dmg` and **drag** *Mac Cleaner* into your `Applications` folder.
+3. **First launch** — because releases are ad-hoc signed (no paid Apple Developer
+   certificate), Gatekeeper warns the first time. **Right-click the app → Open → Open.**
+   You only do this once.
 
-- Bundles a self-contained Node runtime (fetched from nodejs.org and cached in
-  `.node-cache/` when your local node is Homebrew-linked).
-- `NODE_BIN=/path/to/node` overrides the bundled runtime (e.g. an x64 build for Intel).
-- `SIGN_ID="Developer ID Application: …"` signs properly; add `NOTARY_PROFILE=<profile>`
-  to notarize + staple the DMG. Without them the build is ad-hoc signed.
+   <details><summary>Prefer the terminal? Remove the quarantine flag instead</summary>
 
-Release flow: bump `VERSION` → `./build-app.sh` → `git tag v$(cat VERSION)` →
-`gh release create v$(cat VERSION) dist/Mac.Cleaner.dmg` — the landing page always points
-at `releases/latest/download/Mac.Cleaner.dmg`.
+   ```sh
+   xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"
+   ```
+   </details>
 
-Grant **Full Disk Access** to your terminal app (System Settings → Privacy & Security →
-Full Disk Access) for complete results — a few locations (Safari cache, device backups,
-some container data) are unreadable without it. The dashboard detects this and offers a
-one-click deep link to the right settings pane.
+4. (Optional but recommended) **Grant Full Disk Access** — see below. The app walks you
+   through it on first run and detects the grant live.
+
+> **Apple Silicon** build. On Intel, [run from source](#run-from-source-web-dashboard) or
+> [build it yourself](#build-the-app--dmg-yourself) with an x64 Node.
+
+## Full Disk Access
+
+A few locations (Safari cache, Mail, iOS device backups, parts of System Data) are invisible
+to *any* app without **Full Disk Access (FDA)**. macOS cannot pop a permission prompt for
+this, so Mac Cleaner shows a three-step onboarding card and detects the grant live:
+
+1. Click **Open Full Disk Access settings** (deep-links straight to the right pane).
+2. Turn on **Mac Cleaner** (app) *or* **your terminal app** (running from source) — add it
+   with the **+** button if it isn't listed.
+3. Watch the status pill flip to **granted**, then **Rescan**.
+
+FDA is entirely optional — everything else scans fine without it. If the pill stays orange
+after enabling, quit and relaunch (the grant applies to newly started processes).
+
+## How to use it
+
+<img src="docs/detail.svg" alt="Mac Cleaner — drill-down detail view" width="820">
+
+1. **Start Scan.** The worker pool fans out; the disk gauge and category cards populate live
+   — no need to wait for the full scan to finish.
+2. **Browse the overview.** Each card shows a category's total size, item count and a
+   safety-split bar (green `safe` / amber `caution` / red `risky`). Read-only and 🔒
+   no-access counts show inline.
+3. **Drill in.** Click a card to see every file in it. Hover any row for *why* it's cleanable
+   and *how it comes back*. Root-owned rows are marked **read-only** with the equivalent
+   terminal command instead of a delete button.
+4. **Select what to remove.** Tick individual items, a whole category, or hit
+   **Select all safe** to grab everything green in one click. The selection bar tallies size
+   and safety as you go.
+5. **Choose a mode.** **Move to Trash** (restorable) or **Delete permanently**. Risky items
+   force an extra "I understand this cannot be recovered" checkbox before the button unlocks.
+6. **Clean.** A confirmation dialog lists exactly what will go; deletion re-validates every
+   path immediately before touching disk. The disk gauge and "reclaimed" counter update after.
+
+**Handy extras**
+
+- **Filter / sort** — search by name or path, filter by minimum size, sort by size / name /
+  file count / age.
+- **Suggested terminal commands** — for things a web UI shouldn't touch directly (Homebrew
+  cleanup, `docker system prune`, orphaned simulator deletion, Time Machine snapshot thinning,
+  Go module cache, Conda, CocoaPods) — copy with one click.
+- **Keyboard** — `/` focuses search, `Esc` closes a dialog or exits a category.
+- **Deep links** — a category view has its own URL (`#g/xcode`), so browser back/forward work.
+
+## What it scans
+
+21 categories, covering mobile, web, backend, game and ML tooling:
+
+| | Category | Examples |
+|---|---|---|
+| 🗑️ | **Trash** | The system Trash (per-volume) |
+| 🗄️ | **System Data** | iOS device updates, Homebrew cache, diagnostic reports, update payloads, local snapshots, system caches |
+| 🔨 | **Xcode & iOS** | `DerivedData`, Archives, device support, simulators, caches |
+| 🤖 | **Android & JVM** | Gradle caches & wrappers, AVDs, NDK, `.m2`, Kotlin/KTS |
+| 🐦 | **Flutter & Dart** | Pub cache, Flutter SDK caches, `.dart_tool` |
+| 📦 | **JavaScript & Node** | npm / pnpm / yarn stores, Bun, `node_modules` |
+| 🐍 | **Python** | pip cache, virtualenvs, `__pycache__`, Conda |
+| ⚙️ | **Go · Rust · Other Languages** | Go module cache, Cargo, and more |
+| 🎮 | **Game Engines** | Unity, Unreal caches & derived data |
+| 🐳 | **Docker & VMs** | Docker.raw / disk images, VM disks |
+| 💻 | **IDEs & Editors** | JetBrains, VS Code, Android Studio caches |
+| 🌐 | **Browsers** | Chrome / Safari / Firefox caches |
+| 💬 | **App Caches & Data** | Slack, Spotify, Discord, communication apps |
+| 🧠 | **AI & ML** | Model caches and toolchain data |
+| 📱 | **Device Backups** | iOS/iPadOS backups (⚠️ risky) |
+| 🧹 | **User App Caches** | Generic `~/Library/Caches` sweep |
+| 🖥️ | **System Caches & Logs** | User-owned system caches and logs |
+| 🏗️ | **Project Build Artifacts** | `node_modules`, `build`, `.next`, `Pods`, `target`, `.venv`, ~25 patterns |
+| 🐘 | **Large Files (500 MB+)** | Big files anywhere in `$HOME` |
+| 📲 | **App Binaries** | `.apk` / `.aab` / `.ipa` ≥ 5 MB |
+| 💿 | **Installers & Disk Images** | Leftover `.dmg` / `.pkg` in Downloads |
+
+The **Project Build Artifacts** walker is gated on sibling files (e.g. `build/` only counts
+next to `pubspec.yaml` / `gradlew` / `package.json`) to avoid false positives on
+generically-named folders, and clusters artifacts per project.
+
+## System Data — the mystery bar, explained
+
+The single biggest source of "where did my disk go?" is macOS **System Data**. Mac Cleaner
+sizes and explains it:
+
+| Item | What it is | Handling |
+|---|---|---|
+| iPhone/iPad/iPod software updates | Old device `.ipsw` images | `safe` — deletable |
+| Device restore images | `MobileDevice/Software Images` | `safe` — deletable |
+| Homebrew download cache | `~/Library/Caches/Homebrew` | `safe` — deletable (or `brew cleanup --prune=all`) |
+| Diagnostic reports (user & system) | Crash logs | `safe` / `caution` |
+| macOS update payloads | `/Library/Updates` | `caution` · **read-only** (macOS-managed) |
+| Time Machine local snapshots | APFS snapshots | `caution` · **read-only** (shown with the `tmutil` command) |
+| Per-user system cache/temp | `/var/folders/…/C`, `…/T` | `caution` · **read-only** (a reboot clears what's safe) |
+| Spotlight index | `.Spotlight-V100` | `caution` · **read-only** (`sudo mdutil -E /`) |
+| Swap / VM | `/System/Volumes/VM` | `caution` · **read-only** explainer |
+
+Anything root-owned is **displayed with its size but never deletable from the UI** — you get
+the exact `sudo` command instead. Truly untouchable paths (`/System/*`, `/private/var/db`,
+dyld/Cryptexes) aren't even shown.
 
 ## Safety model
 
 | Level | Meaning |
 |---|---|
-| `safe` | Pure cache, regenerated automatically. Costs nothing but a slightly slower next run. |
-| `caution` | Re-downloadable / rebuildable, but costs time or bandwidth (or minor state loss). |
-| `risky` | Potential data loss (device backups, VM disks, recordings, Xcode archives). Requires explicit acknowledgment before delete. |
+| 🟢 `safe` | Pure cache, regenerated automatically. Costs nothing but a slightly slower next run. |
+| 🟡 `caution` | Re-downloadable / rebuildable, but costs time or bandwidth (or minor state loss). |
+| 🔴 `risky` | Potential real data loss — device backups, VM disks, recordings, Xcode archives. Requires explicit acknowledgment before delete. |
 
 ## Security model
 
-The server can delete files on your machine, so it is deliberately strict:
+This tool can delete files, so it is deliberately strict — and open source, so you can
+verify every claim:
 
-- Binds `127.0.0.1` only — never reachable from the network.
-- `Host` header must be `localhost`/`127.0.0.1` on that port (DNS-rebinding defense).
-- `Origin` header, when present, must match this server (CSRF defense).
-- Every `POST` requires a per-boot random token, injected server-side into the served HTML —
-  no other page or script can forge a delete request.
-- Only paths the scanner itself registered can be deleted, and only after a validation
-  chain: realpath resolution, allow-listed roots, an exact-match banned-paths set (home dir,
-  `Desktop`, `Documents`, `Library`, `Keychains`, `Preferences`, …), a minimum path depth, and
-  a symlink check at delete time (defends against a path being swapped after the scan
-  completed — TOCTOU).
+- **Local only.** Binds `127.0.0.1` — never reachable from the network. No account, no
+  telemetry, nothing uploaded.
+- **DNS-rebinding defense.** The `Host` header must be `localhost`/`127.0.0.1` on the bound
+  port.
+- **CSRF defense.** The `Origin` header, when present, must match this server.
+- **Per-boot token.** Every mutating `POST` requires a random token injected server-side into
+  the served HTML — no other page or script can forge a delete.
+- **Validated deletes only.** Only paths the scanner itself registered can be deleted, and
+  only after a full chain: realpath resolution, an allow-listed root set (`$HOME`,
+  `/Library/Caches`, `/Library/Logs`), an exact-match banned-paths set (home dir, `Desktop`,
+  `Documents`, `Library`, `Keychains`, `Preferences`, …), a minimum path depth, and a symlink
+  re-check *at delete time* (defends against a path being swapped after the scan — TOCTOU).
+- **`displayOnly` is enforced twice** — root-owned items are rejected both when queued and
+  again at delete validation.
+
+## Run from source (web dashboard)
+
+Requires Node.js. **No `npm install`** — the app uses built-ins only.
+
+```sh
+git clone https://github.com/eslamfaisal/mac-cleaner.git
+cd mac-cleaner
+npm start
+# → http://127.0.0.1:4545
+```
+
+For complete results, grant **Full Disk Access** to your terminal app (System Settings →
+Privacy & Security → Full Disk Access). The dashboard detects this and offers a one-click
+deep link to the right pane.
+
+## Build the app / DMG yourself
+
+Requires **Xcode** (for `swiftc`); everything else is stock macOS tooling (`sips`,
+`iconutil`, `codesign`, `hdiutil`).
+
+```sh
+./build-app.sh
+# → dist/Mac Cleaner.app  +  dist/Mac.Cleaner.dmg
+```
+
+What it does: compiles the Swift wrapper, builds the icon and `Info.plist` from `VERSION`,
+copies the server (`server.js`, `lib/`, `public/`), **bundles a self-contained Node runtime**,
+code-signs, and produces a DMG with an `/Applications` drop symlink.
+
+| Env var | Effect |
+|---|---|
+| `NODE_BIN=/path/to/node` | Bundle a specific Node (e.g. an **x64** build for Intel). |
+| `NODE_DIST_VERSION=v22.12.0` | Which official Node to fetch if your local one isn't portable. |
+| `SIGN_ID="Developer ID Application: …"` | Proper signing instead of ad-hoc. |
+| `NOTARY_PROFILE=<profile>` | With `SIGN_ID`, also notarize + staple the DMG. |
+
+> **Why it may download Node:** Homebrew's `node` links dylibs from the Cellar
+> (`@rpath/libnode…`) that don't exist on other machines. When the build detects a
+> non-portable local Node, it fetches the official standalone build from nodejs.org and
+> caches it in `.node-cache/`. Set `NODE_BIN` to skip this.
+
+## Cutting a release
+
+```sh
+# 1. bump the version
+echo 1.1.1 > VERSION
+
+# 2. build the artifacts
+./build-app.sh
+
+# 3. tag and publish
+git commit -am "Release v$(cat VERSION)"
+git tag "v$(cat VERSION)"
+git push && git push --tags
+gh release create "v$(cat VERSION)" dist/Mac.Cleaner.dmg \
+  --title "Mac Cleaner v$(cat VERSION)" --notes "…"
+```
+
+The download button everywhere points at the **version-less** asset URL
+`releases/latest/download/Mac.Cleaner.dmg`, so it always resolves to the newest release —
+no link changes needed.
+
+## Landing page
+
+`landing/index.html` is a standalone one-file page (inline CSS/JS, renders from `file://`)
+with the same dark palette, a feature grid, the security model, an FAQ and the download
+button. It's Firebase Hosting-ready:
+
+```sh
+firebase deploy   # uses firebase.json → hosting.public = "landing"
+```
 
 ## Project structure
 
 ```
-server.js          HTTP server: static files, SSE event stream, delete pipeline, security checks
+server.js           HTTP server: static files, SSE stream, delete pipeline, security checks
 lib/categories.js   Declarative catalog of every cleanable location + safety metadata
-lib/scanner.js       Scan orchestrator: worker pool, item registry, dedup, cross-references
-lib/worker.js        Worker thread: directory sizing + home-directory artifact walk
-public/              Static frontend (vanilla HTML/CSS/JS, no build step)
-app/                 Swift WKWebView wrapper + Info.plist template + icon
-build-app.sh         Builds dist/Mac Cleaner.app and dist/Mac.Cleaner.dmg
-landing/             Standalone landing page (Firebase Hosting-ready, see firebase.json)
-VERSION              Single source of truth for the app/release version
+lib/scanner.js      Scan orchestrator: worker pool, item registry, dedup, cross-references
+lib/worker.js       Worker thread: directory sizing + home-directory artifact walk
+public/             Static frontend (vanilla HTML/CSS/JS, no build step)
+app/                Swift WKWebView wrapper + Info.plist template + icon
+build-app.sh        Builds dist/Mac Cleaner.app and dist/Mac.Cleaner.dmg
+landing/            Standalone landing page (Firebase Hosting-ready, see firebase.json)
+docs/               README assets (SVG previews)
+VERSION             Single source of truth for the app/release version
 ```
 
-### How a scan works
+## How a scan works
 
-1. `server.js` boots a `Scanner`, which spins up a pool of worker threads (`os.cpus() - 2`,
+1. `server.js` boots a `Scanner`, which spins up a worker-thread pool (`os.cpus() − 2`,
    clamped 2–8).
-2. Every location in `lib/categories.js` is registered; each becomes an "item" with a unique
-   id, sized by a worker task. Registration order matters — earlier, more specific entries
-   claim their paths first so later generic sweeps (e.g. "all of `~/Library/Caches`") skip
-   anything already accounted for.
-3. In parallel, a home-directory walk (`lib/worker.js`) looks for project build artifacts,
-   large files, stray binaries, and installers, fanning out into parallel subtasks for the
-   first couple of directory levels.
+2. Every location in `lib/categories.js` is registered as an "item" with a unique id, sized
+   by a worker task. Registration order matters — earlier, more specific entries claim their
+   paths first so later generic sweeps (e.g. all of `~/Library/Caches`) skip what's already
+   accounted for.
+3. In parallel, a home-directory walk (`lib/worker.js`) finds project build artifacts, large
+   files, stray binaries and installers, fanning out into parallel subtasks.
 4. Results stream to the browser over `/api/events` (SSE), coalesced to ~10 Hz so the tab
-   never floods; a plain `GET /api/state` gives a point-in-time snapshot.
-5. Deleting posts to `/api/delete` with a list of item ids and a mode (`trash` / permanent);
-   deletions run with bounded concurrency and re-validate every path immediately before
-   touching disk.
+   never floods; `GET /api/state` gives a point-in-time snapshot.
+5. Deleting posts to `/api/delete` with item ids + a mode; deletions run with bounded
+   concurrency and re-validate every path immediately before touching disk.
 
-## API
+## HTTP API
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -168,14 +350,67 @@ VERSION              Single source of truth for the app/release version
 | `/api/events` | GET | SSE stream of live scan/delete progress |
 | `/api/scan/start` | POST | Start (or restart) a scan |
 | `/api/scan/cancel` | POST | Cancel the in-progress scan |
-| `/api/delete` | POST | Delete/trash a set of item ids: `{ ids: string[], mode: 'trash' \| 'rm' }` |
+| `/api/delete` | POST | Delete/trash item ids: `{ ids: string[], mode: 'trash' \| 'rm' }` |
 | `/api/reveal` | POST | Reveal an item in Finder |
 | `/api/settings/fda` | POST | Deep-link to the Full Disk Access settings pane |
 
-All `POST` requests require the `x-token` header (the per-boot token embedded in the served
-page) — the API is not meant to be called from anywhere but the bundled frontend.
+All `POST`s require the `x-token` header (the per-boot token embedded in the served page) —
+the API is not meant to be called from anywhere but the bundled frontend.
+
+## FAQ & troubleshooting
+
+<details>
+<summary><b>macOS says the app "cannot be opened" or "is damaged"</b></summary>
+
+The build is ad-hoc signed, so Gatekeeper blocks the first launch. Right-click the app →
+**Open** → **Open** (once). Or clear the quarantine flag:
+```sh
+xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"
+```
+</details>
+
+<details>
+<summary><b>Sizes look small / Safari & backups are missing</b></summary>
+
+That's Full Disk Access. Grant it to **Mac Cleaner** (app) or **your terminal** (source),
+then **Rescan**. See [Full Disk Access](#full-disk-access). If the pill stays orange after
+enabling, quit and relaunch — the grant only applies to newly started processes.
+</details>
+
+<details>
+<summary><b>Port 4545 is already in use</b></summary>
+
+Running from source uses `4545`. The **app** asks the OS for a free ephemeral port instead,
+so it never collides with a manual `npm start`. To change the source port:
+`PORT=5000 npm start`.
+</details>
+
+<details>
+<summary><b>I'm on an Intel Mac</b></summary>
+
+The prebuilt DMG is Apple Silicon. Either [run from source](#run-from-source-web-dashboard),
+or build with an x64 Node: `NODE_BIN=/path/to/x64/node ./build-app.sh`.
+</details>
+
+<details>
+<summary><b>Will it ever delete something on its own?</b></summary>
+
+No. Scanning is read-only. Deletion only happens for items you selected, after a confirmation
+dialog and a second server-side validation pass — and risky items require an extra explicit
+acknowledgment.
+</details>
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Provided as-is, no warranty. Use at your own risk;
-always double-check what you're about to delete, especially anything marked `risky`.
+**MIT** — see [LICENSE](LICENSE). Provided as-is, no warranty. Use at your own risk; always
+double-check what you're about to delete, especially anything marked `risky`.
+
+<div align="center">
+
+**[⬇ Download](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)** ·
+**[Releases](https://github.com/eslamfaisal/mac-cleaner/releases)** ·
+**[Issues](https://github.com/eslamfaisal/mac-cleaner/issues)**
+
+Made for developers who are tired of "System Data · 131 GB".
+
+</div>
