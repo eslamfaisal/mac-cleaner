@@ -235,7 +235,10 @@ async function listDeleteTargets(item) {
     const st = fs.lstatSync(item.path);
     if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('target changed since validation');
     if (fs.realpathSync(item.path) !== item.real) throw new Error('path changed since scan — rescan first');
-    return (await fsp.readdir(item.path)).map(n => path.join(item.path, n));
+    let names = await fsp.readdir(item.path);
+    // e.g. JetBrains LocalHistory — recovery data carved out of a cache sweep
+    if (item.contentsExclude) names = names.filter(n => !item.contentsExclude.includes(n));
+    return names.map(n => path.join(item.path, n));
   }
   return [item.path, ...(item.extraDelete || [])];
 }

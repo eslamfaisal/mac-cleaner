@@ -42,8 +42,9 @@
 <main>
   <section class="hero" id="hero">
     <h1>Find what is eating your disk</h1>
-    <p>Scans developer caches (Xcode, Gradle, Flutter, npm, …), app caches, build artifacts,
-       large files and installers. Everything is classified — nothing is deleted unless you say so.</p>
+    <p>Scans developer caches (Xcode, Gradle, Flutter, npm, Unity, Unreal, Docker, …), app caches,
+       build artifacts, large files and installers — for mobile, web, backend and game developers.
+       Everything is classified — nothing is deleted unless you say so.</p>
     <button class="btn btn-primary btn-lg" id="hero-scan">Start Scan</button>
   </section>
 
@@ -69,6 +70,13 @@
       <option value="104857600">≥ 100 MB</option>
       <option value="1073741824">≥ 1 GB</option>
     </select>
+    <select id="sort" title="Sort items">
+      <option value="size" selected>Sort: size</option>
+      <option value="name">Sort: name</option>
+      <option value="files">Sort: files</option>
+      <option value="age">Sort: oldest</option>
+    </select>
+    <span class="scan-meta muted" id="scan-meta"></span>
     <div class="spacer"></div>
     <button class="btn" id="select-safe">Select all safe</button>
     <button class="btn" id="select-none">Clear selection</button>
@@ -81,10 +89,17 @@
     <p class="muted">These are cleaned best with their own tools — copy and run in your terminal.</p>
     <div class="cmd-grid" id="cmd-grid"></div>
   </section>
+
+  <section class="coverage" id="coverage" hidden>
+    <h2>Scan coverage</h2>
+    <p class="muted">Every category this scan checked — mobile, web, backend, game and ML tooling.
+       Empty categories mean nothing was found on this Mac.</p>
+    <div class="coverage-grid" id="coverage-grid"></div>
+  </section>
 </main>
 
 <footer class="selection-bar" id="selection-bar" hidden>
-  <div class="sel-info"><b id="sel-count">0</b> items · <b id="sel-size">0 B</b></div>
+  <div class="sel-info"><b id="sel-count">0</b> items · <b id="sel-size">0 B</b> <span class="sel-breakdown" id="sel-breakdown"></span></div>
   <button class="btn" id="sel-clear">Clear</button>
   <button class="btn btn-danger" id="sel-clean">Clean selected</button>
 </footer>

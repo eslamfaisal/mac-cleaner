@@ -18,6 +18,8 @@ const state = {
     minBytes: 10 * 1024 * 1024,
   },
   mode: localStorage.getItem('cleaner-mode') || 'rm',
+  sort: 'size',
+  scanEndedAt: null,
   collapsed: new Set(JSON.parse(localStorage.getItem('cleaner-collapsed') || '[]')),
 };
 
@@ -42,6 +44,23 @@ function fmtBytes(n) {
 }
 
 function fmtCount(n) { return n.toLocaleString('en-US'); }
+
+function fmtAge(mtime) {
+  const days = (Date.now() - mtime) / 86400000;
+  if (days < 1) return 'today';
+  if (days < 30) return Math.round(days) + ' d old';
+  if (days < 365) return Math.round(days / 30) + ' mo old';
+  return (days / 365).toFixed(1) + ' y old';
+}
+
+function sortItems(arr) {
+  const s = state.sort;
+  return arr.sort((a, b) =>
+    s === 'name' ? a.name.localeCompare(b.name)
+    : s === 'files' ? (b.files || 0) - (a.files || 0)
+    : s === 'age' ? (a.mtime || Infinity) - (b.mtime || Infinity)
+    : b.bytes - a.bytes);
+}
 
 async function post(pathname, body) {
   const res = await fetch(pathname, {
@@ -92,7 +111,12 @@ function connect() {
     markDirty();
   });
   es.addEventListener('progress', (e) => { state.scan = JSON.parse(e.data); markDirty(); });
-  es.addEventListener('scan', (e) => { state.scan = JSON.parse(e.data); markDirty(); });
+  es.addEventListener('scan', (e) => {
+    const s = JSON.parse(e.data);
+    if (state.scan.status === 'scanning' && s.status === 'done') state.scanEndedAt = Date.now();
+    state.scan = s;
+    markDirty();
+  });
   es.addEventListener('walk', (e) => { $('#walk-dir').textContent = 'scanning ' + JSON.parse(e.data).dir; });
   es.addEventListener('disk', (e) => { state.disk = JSON.parse(e.data); markDirty(); });
   es.addEventListener('reclaimed', (e) => { state.reclaimed = JSON.parse(e.data).bytes; markDirty(); });
@@ -121,6 +145,7 @@ function buildGroupSections() {
         <span class="g-title">${g.title}</span>
         <span class="g-count"></span>
         <span class="g-hidden"></span>
+        <span class="g-safety"></span>
         <span class="g-size"></span>
         <span class="g-chevron">▾</span>
       </div>
@@ -147,6 +172,7 @@ function buildGroupSections() {
       body: section.querySelector('.group-body'),
       count: section.querySelector('.g-count'),
       hidden: section.querySelector('.g-hidden'),
+      safety: section.querySelector('.g-safety'),
       size: section.querySelector('.g-size'),
       check,
     });
@@ -204,6 +230,7 @@ function render() {
   renderHeader();
   renderSummary();
   renderGroups();
+  renderCoverage();
   renderSelectionBar();
 }
 
@@ -244,6 +271,16 @@ function renderHeader() {
   $('#summary').hidden = !hasItems;
   $('#controls').hidden = !hasItems;
   $('#commands').hidden = !hasItems;
+  $('#coverage').hidden = !hasItems || status === 'scanning';
+
+  if (state.scanEndedAt && status === 'done') {
+    const min = Math.round((Date.now() - state.scanEndedAt) / 60000);
+    $('#scan-meta').textContent = `${fmtCount(state.items.size)} items · scanned ${min < 1 ? 'just now' : min + ' min ago'}`;
+  } else if (status === 'done') {
+    $('#scan-meta').textContent = `${fmtCount(state.items.size)} items`;
+  } else {
+    $('#scan-meta').textContent = '';
+  }
 
   let deniedCount = 0;
   for (const i of state.items.values()) if (i.status === 'denied' || i.denied > 0) deniedCount++;
@@ -260,6 +297,15 @@ function renderSummary() {
     byGroup.set(i.group, (byGroup.get(i.group) || 0) + i.bytes);
   }
   $('#tile-total .tile-value').textContent = fmtBytes(totals.all);
+
+  // live label: what "Select all safe" would actually grab (same exclusions)
+  let bulkSafe = 0;
+  for (const i of state.items.values()) {
+    if (i.safety === 'safe' && selectable(i) && !i.permanentOnly && !i.noTotal
+        && !(i.badges || []).includes('active project')) bulkSafe += i.bytes;
+  }
+  $('#select-safe').textContent = bulkSafe > 0 ? `Select all safe (${fmtBytes(bulkSafe)})` : 'Select all safe';
+
   for (const s of ['safe', 'caution', 'risky']) {
     const tile = document.querySelector(`.tile-safety[data-safety="${s}"]`);
     tile.querySelector('.tile-value').textContent = fmtBytes(totals[s]);
@@ -312,12 +358,19 @@ function renderGroups() {
     const els = groupEls.get(g.id);
     if (!els) continue;
     const all = allByGroup.get(g.id) || [];
-    const vis = (visByGroup.get(g.id) || []).sort((a, b) => b.bytes - a.bytes);
+    const vis = sortItems(visByGroup.get(g.id) || []);
     els.section.hidden = all.length === 0;
     if (all.length === 0) continue;
 
     const totalBytes = all.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0);
     els.size.textContent = fmtBytes(totalBytes);
+
+    const bySafety = { safe: 0, caution: 0, risky: 0 };
+    for (const i of all) if (!['deleted', 'gone'].includes(i.status)) bySafety[i.safety] += i.bytes;
+    els.safety.innerHTML = ['safe', 'caution', 'risky']
+      .filter(s => bySafety[s] > 0)
+      .map(s => `<span class="gs gs-${s}"><span class="dot dot-${s}"></span>${fmtBytes(bySafety[s])}</span>`)
+      .join('');
     els.count.textContent = `${fmtCount(vis.length)} item${vis.length === 1 ? '' : 's'}`;
     const hiddenCount = all.length - vis.length;
     els.hidden.textContent = hiddenCount > 0 ? `(${fmtCount(hiddenCount)} filtered out)` : '';
@@ -355,7 +408,7 @@ function renderGroups() {
         if (!ph) { ph = buildProjectHeader(phId, c.proj); rowEls.set(phId, ph); }
         updateProjectHeader(ph, c);
         place(ph);
-        for (const item of c.items.sort((a, b) => b.bytes - a.bytes)) {
+        for (const item of sortItems(c.items)) {
           seen.add(item.id);
           let row = rowEls.get(item.id);
           if (!row) { row = buildRow(item); rowEls.set(item.id, row); }
@@ -469,7 +522,7 @@ function updateRow(row, item) {
     }
     row.title = (item.why ? item.why : '') + (item.regen ? '\n↩ ' + item.regen : '');
   }
-  row.querySelector('.r-path').textContent = item.display;
+  row.querySelector('.r-path').textContent = item.display + (item.mtime ? '  ·  ' + fmtAge(item.mtime) : '');
 
   const statusEl = row.querySelector('.r-status');
   if (item.status === 'scanning') statusEl.innerHTML = '<span class="spinner"></span>';
@@ -491,9 +544,44 @@ function renderSelectionBar() {
   bar.hidden = ids.length === 0;
   if (ids.length) {
     let bytes = 0;
-    for (const id of ids) bytes += state.items.get(id).bytes;
+    const by = { safe: 0, caution: 0, risky: 0 };
+    for (const id of ids) { const i = state.items.get(id); bytes += i.bytes; by[i.safety] += i.bytes; }
     $('#sel-count').textContent = fmtCount(ids.length);
     $('#sel-size').textContent = fmtBytes(bytes);
+    $('#sel-breakdown').innerHTML = ['safe', 'caution', 'risky']
+      .filter(s => by[s] > 0)
+      .map(s => `<span class="gs gs-${s}"><span class="dot dot-${s}"></span>${fmtBytes(by[s])}</span>`)
+      .join('');
+    // pure-safe selection = quiet; anything caution/risky = visible warning tint
+    bar.classList.toggle('has-caution', by.caution > 0 && by.risky === 0);
+    bar.classList.toggle('has-risky', by.risky > 0);
+  }
+}
+
+function renderCoverage() {
+  const grid = $('#coverage-grid');
+  if (!grid || $('#coverage').hidden) return;
+  const stats = new Map();
+  for (const i of state.items.values()) {
+    if (['deleted', 'gone', 'missing'].includes(i.status) || i.noTotal) continue;
+    const s = stats.get(i.group) || { n: 0, b: 0 };
+    s.n++; s.b += i.bytes;
+    stats.set(i.group, s);
+  }
+  // rebuild only when the signature changes — this render runs at 4 Hz
+  const sig = state.groups.map(g => { const s = stats.get(g.id); return s ? s.n + ':' + s.b : '0'; }).join('|');
+  if (grid.dataset.sig === sig) return;
+  grid.dataset.sig = sig;
+  grid.innerHTML = '';
+  for (const g of state.groups) {
+    const s = stats.get(g.id);
+    const el = document.createElement('div');
+    el.className = 'cov-item' + (s ? '' : ' cov-empty');
+    el.innerHTML = `<span class="cov-icon"></span><span class="cov-title"></span><span class="cov-stat"></span>`;
+    el.children[0].textContent = g.icon;
+    el.children[1].textContent = g.title;
+    el.children[2].textContent = s ? `${fmtCount(s.n)} · ${fmtBytes(s.b)}` : 'none found';
+    grid.appendChild(el);
   }
 }
 
@@ -577,6 +665,15 @@ $('#fda-open').addEventListener('click', () => post('/api/settings/fda').catch(e
 
 $('#search').addEventListener('input', (e) => { state.filters.q = e.target.value.trim(); markDirty(); });
 $('#min-size').addEventListener('change', (e) => { state.filters.minBytes = Number(e.target.value); markDirty(); });
+$('#sort').addEventListener('change', (e) => { state.sort = e.target.value; markDirty(); });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#modal').hidden) { $('#modal').hidden = true; return; }
+  if (e.key === '/' && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+    e.preventDefault();
+    $('#search').focus();
+  }
+});
 
 for (const tile of document.querySelectorAll('.tile-safety')) {
   tile.addEventListener('click', () => {
@@ -588,7 +685,10 @@ for (const tile of document.querySelectorAll('.tile-safety')) {
 
 $('#select-safe').addEventListener('click', () => {
   for (const i of visibleItems()) {
-    if (i.safety === 'safe' && selectable(i) && !(i.badges || []).includes('active project')) state.selection.add(i.id);
+    // permanentOnly (Trash) never joins bulk-safe: emptying it is irreversible.
+    // noTotal items live inside a build dir that gets selected anyway.
+    if (i.safety === 'safe' && selectable(i) && !i.permanentOnly && !i.noTotal
+        && !(i.badges || []).includes('active project')) state.selection.add(i.id);
   }
   markDirty();
 });
