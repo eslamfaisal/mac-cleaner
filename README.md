@@ -1,13 +1,33 @@
 # Mac Cleaner
 
-A local, zero-dependency web dashboard that scans your Mac for cleanable developer
-junk — Xcode/iOS build artifacts, Android/Gradle caches, Flutter/Dart caches, npm/pnpm/yarn
-stores, Python/Go/Rust/Ruby package caches, Docker/VM disks, IDE caches, project build
-output (`node_modules`, `build`, `.next`, `Pods`, …), large files, stray `.apk`/`.aab`/`.ipa`
-binaries, and installer leftovers in `Downloads` — classifies each by safety, and lets you
-delete manually while the scan streams results live over Server-Sent Events.
+A local, zero-dependency cleanup tool for developer Macs — usable as a **native Mac app**
+(DMG download) or as a **local web dashboard** run from source. It scans Xcode/iOS build
+artifacts, Android/Gradle caches, Flutter/Dart caches, npm/pnpm/yarn stores,
+Python/Go/Rust/Ruby package caches, Docker/VM disks, IDE caches, project build output
+(`node_modules`, `build`, `.next`, `Pods`, …), **System Data** (old device updates, local
+snapshots, system caches, update payloads), large files, stray `.apk`/`.aab`/`.ipa`
+binaries, and installer leftovers — classifies each by safety, and lets you delete manually
+while the scan streams results live over Server-Sent Events.
 
 Nothing is ever deleted automatically. You decide what goes.
+
+**Landing page / download:** https://github.com/eslamfaisal/mac-cleaner/releases/latest
+
+## Install (app)
+
+Download `Mac.Cleaner.dmg` from the
+[latest release](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg),
+open it and drag **Mac Cleaner** to Applications.
+
+> **Gatekeeper note:** releases are currently ad-hoc signed (no paid Apple Developer
+> certificate), so the first launch needs right-click → **Open** → **Open**, or:
+> `xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"`.
+> Granting **Full Disk Access** to *Mac Cleaner* in System Settings unlocks Safari/Mail/
+> backup scanning — the app walks you through it on first run.
+
+The app is a ~180-line Swift `WKWebView` shell around the exact same Node server — it exists
+so macOS attributes Full Disk Access to "Mac Cleaner" instead of your terminal, and it
+bundles its own Node runtime, so nothing needs to be installed.
 
 ## Why
 
@@ -53,7 +73,7 @@ caches, `docker system prune`, `simctl`) by surfacing the exact terminal command
   cleanup, `docker system prune`, orphaned simulator/runtime deletion, Time Machine local
   snapshots, Go module cache, Conda, CocoaPods.
 
-## Run
+## Run from source (web dashboard)
 
 Requires Node.js (built-ins only — no `npm install` needed).
 
@@ -61,6 +81,25 @@ Requires Node.js (built-ins only — no `npm install` needed).
 npm start
 # → http://127.0.0.1:4545
 ```
+
+## Build the app / DMG
+
+Requires Xcode (for `swiftc`); everything else is stock macOS tooling.
+
+```sh
+./build-app.sh
+# → dist/Mac Cleaner.app + dist/Mac.Cleaner.dmg
+```
+
+- Bundles a self-contained Node runtime (fetched from nodejs.org and cached in
+  `.node-cache/` when your local node is Homebrew-linked).
+- `NODE_BIN=/path/to/node` overrides the bundled runtime (e.g. an x64 build for Intel).
+- `SIGN_ID="Developer ID Application: …"` signs properly; add `NOTARY_PROFILE=<profile>`
+  to notarize + staple the DMG. Without them the build is ad-hoc signed.
+
+Release flow: bump `VERSION` → `./build-app.sh` → `git tag v$(cat VERSION)` →
+`gh release create v$(cat VERSION) dist/Mac.Cleaner.dmg` — the landing page always points
+at `releases/latest/download/Mac.Cleaner.dmg`.
 
 Grant **Full Disk Access** to your terminal app (System Settings → Privacy & Security →
 Full Disk Access) for complete results — a few locations (Safari cache, device backups,
@@ -98,6 +137,10 @@ lib/categories.js   Declarative catalog of every cleanable location + safety met
 lib/scanner.js       Scan orchestrator: worker pool, item registry, dedup, cross-references
 lib/worker.js        Worker thread: directory sizing + home-directory artifact walk
 public/              Static frontend (vanilla HTML/CSS/JS, no build step)
+app/                 Swift WKWebView wrapper + Info.plist template + icon
+build-app.sh         Builds dist/Mac Cleaner.app and dist/Mac.Cleaner.dmg
+landing/             Standalone landing page (Firebase Hosting-ready, see firebase.json)
+VERSION              Single source of truth for the app/release version
 ```
 
 ### How a scan works
@@ -134,5 +177,5 @@ page) — the API is not meant to be called from anywhere but the bundled fronte
 
 ## License
 
-Personal utility, provided as-is — no warranty. Use at your own risk; always double-check
-what you're about to delete, especially anything marked `risky`.
+MIT — see [LICENSE](LICENSE). Provided as-is, no warranty. Use at your own risk;
+always double-check what you're about to delete, especially anything marked `risky`.

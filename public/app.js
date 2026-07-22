@@ -4,7 +4,13 @@ const TOKEN = document.querySelector('meta[name="token"]').content;
 
 // ------------------------------------------------------------- state ------
 
+function viewFromHash() {
+  const m = location.hash.match(/^#g\/(.+)$/);
+  return m ? { name: 'group', id: decodeURIComponent(m[1]) } : { name: 'overview' };
+}
+
 const state = {
+  view: viewFromHash(),
   groups: [],
   items: new Map(),          // id -> item
   selection: new Set(),
@@ -18,9 +24,10 @@ const state = {
     minBytes: 10 * 1024 * 1024,
   },
   mode: localStorage.getItem('cleaner-mode') || 'rm',
+  fdaDismissed: sessionStorage.getItem('cleaner-fda-dismissed') === '1',
+  fdaJustGranted: 0,
   sort: 'size',
   scanEndedAt: null,
-  collapsed: new Set(JSON.parse(localStorage.getItem('cleaner-collapsed') || '[]')),
 };
 
 let dirty = false;
@@ -95,10 +102,18 @@ function connect() {
     state.reclaimed = snap.reclaimed;
     state.commands = snap.commands;
     state.fda = snap.fda;
+    state.appMode = snap.appMode;
+    $('#app-version').textContent = snap.version && snap.version !== 'dev' ? 'v' + snap.version : '';
     state.items = new Map(snap.items.map(i => [i.id, i]));
     for (const id of [...state.selection]) if (!state.items.has(id)) state.selection.delete(id);
     snap.groups.forEach((g, idx) => groupColor.set(g.id, SLOT_COLORS[idx % SLOT_COLORS.length]));
+    // stale deep-link (group id no longer exists) → back to overview
+    if (state.view.name === 'group' && !snap.groups.some(g => g.id === state.view.id)) {
+      history.replaceState(null, '', '#');
+      state.view = { name: 'overview' };
+    }
     buildGroupSections();
+    buildCards();
     buildCommands();
     markDirty();
   });
@@ -120,7 +135,17 @@ function connect() {
   es.addEventListener('walk', (e) => { $('#walk-dir').textContent = 'scanning ' + JSON.parse(e.data).dir; });
   es.addEventListener('disk', (e) => { state.disk = JSON.parse(e.data); markDirty(); });
   es.addEventListener('reclaimed', (e) => { state.reclaimed = JSON.parse(e.data).bytes; markDirty(); });
-  es.addEventListener('fda', (e) => { state.fda = JSON.parse(e.data).granted; markDirty(); });
+  es.addEventListener('fda', (e) => {
+    const granted = JSON.parse(e.data).granted;
+    const was = state.fda;
+    state.fda = granted;
+    // keep the card up briefly so the user sees the pill flip green
+    if (granted && was === false) {
+      state.fdaJustGranted = Date.now();
+      setTimeout(markDirty, 4500);
+    }
+    markDirty();
+  });
   es.onerror = () => { /* EventSource auto-reconnects; hello resyncs */ };
 }
 
@@ -136,7 +161,7 @@ function buildGroupSections() {
   rowEls.clear();
   for (const g of state.groups) {
     const section = document.createElement('div');
-    section.className = 'group' + (state.collapsed.has(g.id) ? ' collapsed' : '');
+    section.className = 'group';
     section.hidden = true;
     section.innerHTML = `
       <div class="group-header">
@@ -147,18 +172,9 @@ function buildGroupSections() {
         <span class="g-hidden"></span>
         <span class="g-safety"></span>
         <span class="g-size"></span>
-        <span class="g-chevron">▾</span>
       </div>
       <div class="group-body"></div>`;
-    const header = section.querySelector('.group-header');
     const check = section.querySelector('input');
-    header.addEventListener('click', (e) => {
-      if (e.target === check) return;
-      section.classList.toggle('collapsed');
-      if (section.classList.contains('collapsed')) state.collapsed.add(g.id); else state.collapsed.delete(g.id);
-      localStorage.setItem('cleaner-collapsed', JSON.stringify([...state.collapsed]));
-    });
-    check.addEventListener('click', (e) => e.stopPropagation());
     check.addEventListener('change', () => {
       // operate on ALL selectable items of the group (not just filtered-visible
       // ones) so the checkbox always reflects what would actually be deleted
@@ -229,8 +245,8 @@ setInterval(() => { if (dirty) { dirty = false; render(); } }, 250);
 function render() {
   renderHeader();
   renderSummary();
-  renderGroups();
-  renderCoverage();
+  if (state.view.name === 'group') renderDetail();
+  else renderCards();
   renderSelectionBar();
 }
 
@@ -267,11 +283,13 @@ function renderHeader() {
   }
 
   const hasItems = state.items.size > 0;
+  const overview = state.view.name === 'overview';
   $('#hero').hidden = hasItems || status === 'scanning';
-  $('#summary').hidden = !hasItems;
+  $('#summary').hidden = !hasItems || !overview;
   $('#controls').hidden = !hasItems;
-  $('#commands').hidden = !hasItems;
-  $('#coverage').hidden = !hasItems || status === 'scanning';
+  $('#commands').hidden = !hasItems || !overview;
+  $('#cards').hidden = !hasItems || !overview;
+  $('#detail').hidden = overview;
 
   if (state.scanEndedAt && status === 'done') {
     const min = Math.round((Date.now() - state.scanEndedAt) / 60000);
@@ -282,9 +300,33 @@ function renderHeader() {
     $('#scan-meta').textContent = '';
   }
 
+  renderFda();
+}
+
+function renderFda() {
   let deniedCount = 0;
   for (const i of state.items.values()) if (i.status === 'denied' || i.denied > 0) deniedCount++;
-  $('#fda-banner').hidden = state.fda !== false && deniedCount < 3;
+  const missing = state.fda === false;
+  const justGranted = state.fdaJustGranted && Date.now() - state.fdaJustGranted < 4500;
+  const showCard = (missing || justGranted) && !state.fdaDismissed;
+  $('#fda-card').hidden = !showCard;
+  $('#fda-lock').hidden = !(missing || deniedCount >= 3);
+  if (!showCard) return;
+
+  $('#fda-target').textContent = state.appMode ? 'Mac Cleaner' : 'your terminal app (Terminal, iTerm, …)';
+  const pill = $('#fda-pill');
+  const hint = $('#fda-hint');
+  if (missing) {
+    pill.className = 'fda-pill waiting';
+    pill.innerHTML = '<span class="spinner"></span> waiting for permission…';
+    hint.textContent = state.appMode
+      ? 'If it stays orange after enabling, quit and reopen Mac Cleaner, then rescan.'
+      : 'If it stays orange after enabling, restart ./run.sh in your terminal, then rescan.';
+  } else {
+    pill.className = 'fda-pill granted';
+    pill.textContent = '✓ Full Disk Access granted';
+    hint.textContent = 'Rescan to pick up newly accessible locations.';
+  }
 }
 
 function renderSummary() {
@@ -357,10 +399,11 @@ function renderGroups() {
   for (const g of state.groups) {
     const els = groupEls.get(g.id);
     if (!els) continue;
+    // detail view shows exactly one group; the rest stay hidden and unrendered
+    if (g.id !== state.view.id) { els.section.hidden = true; continue; }
     const all = allByGroup.get(g.id) || [];
     const vis = sortItems(visByGroup.get(g.id) || []);
-    els.section.hidden = all.length === 0;
-    if (all.length === 0) continue;
+    els.section.hidden = false;
 
     const totalBytes = all.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0);
     els.size.textContent = fmtBytes(totalBytes);
@@ -505,7 +548,7 @@ function updateRow(row, item) {
   check.disabled = !selectable(item);
 
   const nameEl = row.querySelector('.r-name');
-  const badgeSig = [item.safety, ...(item.badges || [])].join('|');
+  const badgeSig = [item.safety, item.needs || '', ...(item.badges || [])].join('|');
   if (row.dataset.badgeSig !== badgeSig || nameEl.querySelector('.nm').textContent !== item.name) {
     row.dataset.badgeSig = badgeSig;
     nameEl.innerHTML = '<span class="nm"></span>';
@@ -514,6 +557,12 @@ function updateRow(row, item) {
     sb.className = 'badge badge-safety-' + item.safety;
     sb.textContent = item.safety;
     nameEl.appendChild(sb);
+    if (item.needs) {
+      const nb = document.createElement('span');
+      nb.className = 'badge badge-needs';
+      nb.textContent = item.needs === 'fda' ? 'needs Full Disk Access' : 'root-managed';
+      nameEl.appendChild(nb);
+    }
     for (const b of item.badges || []) {
       const el = document.createElement('span');
       el.className = 'badge badge-info';
@@ -558,32 +607,119 @@ function renderSelectionBar() {
   }
 }
 
-function renderCoverage() {
-  const grid = $('#coverage-grid');
-  if (!grid || $('#coverage').hidden) return;
-  const stats = new Map();
-  for (const i of state.items.values()) {
-    if (['deleted', 'gone', 'missing'].includes(i.status) || i.noTotal) continue;
-    const s = stats.get(i.group) || { n: 0, b: 0 };
-    s.n++; s.b += i.bytes;
-    stats.set(i.group, s);
-  }
-  // rebuild only when the signature changes — this render runs at 4 Hz
-  const sig = state.groups.map(g => { const s = stats.get(g.id); return s ? s.n + ':' + s.b : '0'; }).join('|');
-  if (grid.dataset.sig === sig) return;
-  grid.dataset.sig = sig;
-  grid.innerHTML = '';
+// ------------------------------------------------------------- cards ------
+
+const cardEls = new Map();   // groupId -> {el, size, meta, bar: {safe, caution, risky}}
+
+function buildCards() {
+  const wrap = $('#cards');
+  wrap.innerHTML = '';
+  cardEls.clear();
   for (const g of state.groups) {
-    const s = stats.get(g.id);
-    const el = document.createElement('div');
-    el.className = 'cov-item' + (s ? '' : ' cov-empty');
-    el.innerHTML = `<span class="cov-icon"></span><span class="cov-title"></span><span class="cov-stat"></span>`;
-    el.children[0].textContent = g.icon;
-    el.children[1].textContent = g.title;
-    el.children[2].textContent = s ? `${fmtCount(s.n)} · ${fmtBytes(s.b)}` : 'none found';
-    grid.appendChild(el);
+    const el = document.createElement('button');
+    el.className = 'card';
+    el.setAttribute('aria-label', 'Open ' + g.title);
+    el.style.setProperty('--card-accent', groupColor.get(g.id) || 'var(--c-other)');
+    el.innerHTML = `
+      <div class="card-top">
+        <span class="card-icon">${g.icon}</span>
+        <span class="card-title">${g.title}</span>
+        <span class="card-chevron">›</span>
+      </div>
+      <div class="card-size">—</div>
+      <div class="card-meta"></div>
+      <div class="card-bar">
+        <div class="cb-safe"></div><div class="cb-caution"></div><div class="cb-risky"></div>
+      </div>`;
+    el.addEventListener('click', () => { if (!el.classList.contains('card-empty')) openGroup(g.id); });
+    wrap.appendChild(el);
+    cardEls.set(g.id, {
+      el,
+      size: el.querySelector('.card-size'),
+      meta: el.querySelector('.card-meta'),
+      bar: {
+        safe: el.querySelector('.cb-safe'),
+        caution: el.querySelector('.cb-caution'),
+        risky: el.querySelector('.cb-risky'),
+      },
+    });
   }
 }
+
+function renderCards() {
+  const stats = new Map();
+  for (const i of state.items.values()) {
+    if (['deleted', 'gone', 'missing'].includes(i.status)) continue;
+    const s = stats.get(i.group)
+      || { n: 0, b: 0, safe: 0, caution: 0, risky: 0, ro: 0, denied: 0, scanning: 0, match: false };
+    s.n++;
+    if (!i.noTotal) { s.b += i.bytes; s[i.safety] += i.bytes; }
+    if (i.displayOnly) s.ro++;
+    if (i.status === 'denied') s.denied++;
+    if (i.status === 'scanning') s.scanning++;
+    if (state.filters.q) {
+      const q = state.filters.q.toLowerCase();
+      if (i.name.toLowerCase().includes(q) || i.display.toLowerCase().includes(q)) s.match = true;
+    }
+    stats.set(i.group, s);
+  }
+  const q = state.filters.q.toLowerCase();
+  for (const g of state.groups) {
+    const c = cardEls.get(g.id);
+    if (!c) continue;
+    const s = stats.get(g.id);
+    const empty = !s;
+    c.el.classList.toggle('card-empty', empty);
+    c.el.disabled = empty;
+    if (empty) {
+      c.size.textContent = '—';
+      c.meta.textContent = 'nothing found';
+      for (const k of ['safe', 'caution', 'risky']) c.bar[k].style.width = '0%';
+    } else {
+      c.size.textContent = fmtBytes(s.b);
+      const bits = [`${fmtCount(s.n)} item${s.n === 1 ? '' : 's'}`];
+      if (s.scanning) bits.push('scanning…');
+      if (s.ro) bits.push(`${fmtCount(s.ro)} read-only`);
+      if (s.denied) bits.push(`🔒 ${fmtCount(s.denied)}`);
+      c.meta.textContent = bits.join(' · ');
+      const tot = s.b || 1;
+      for (const k of ['safe', 'caution', 'risky']) c.bar[k].style.width = (s[k] / tot * 100) + '%';
+    }
+    // overview search: spotlight cards whose title or contents match
+    const titleMatch = q && g.title.toLowerCase().includes(q);
+    const match = q ? (titleMatch || (s && s.match)) : false;
+    c.el.classList.toggle('card-match', !!match);
+    c.el.classList.toggle('card-dim', !!q && !match);
+  }
+}
+
+// ------------------------------------------------------------- detail -----
+
+function renderDetail() {
+  const g = state.groups.find(x => x.id === state.view.id);
+  if (!g) return;
+  renderGroups();
+}
+
+function openGroup(id) { location.hash = '#g/' + encodeURIComponent(id); }
+function closeGroup() { location.hash = ''; }
+
+function applyViewSwap(next) {
+  const swap = () => {
+    state.view = next;
+    if (next.name === 'group') window.scrollTo({ top: 0 });
+    render();
+    const shown = $(next.name === 'group' ? '#detail' : '#cards');
+    shown.classList.remove('view-enter');
+    void shown.offsetWidth;            // restart the enter animation
+    shown.classList.add('view-enter');
+  };
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reduced && document.startViewTransition) document.startViewTransition(swap);
+  else swap();
+}
+
+window.addEventListener('hashchange', () => applyViewSwap(viewFromHash()));
 
 // ------------------------------------------------------------- modal ------
 
@@ -662,13 +798,28 @@ $('#scan-btn').addEventListener('click', () => {
 });
 $('#hero-scan').addEventListener('click', () => post('/api/scan/start').catch(e => toast(e.message, true)));
 $('#fda-open').addEventListener('click', () => post('/api/settings/fda').catch(e => toast(e.message, true)));
+$('#fda-dismiss').addEventListener('click', () => {
+  state.fdaDismissed = true;
+  sessionStorage.setItem('cleaner-fda-dismissed', '1');
+  markDirty();
+});
+$('#fda-lock').addEventListener('click', () => {
+  state.fdaDismissed = false;
+  sessionStorage.removeItem('cleaner-fda-dismissed');
+  markDirty();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
 
 $('#search').addEventListener('input', (e) => { state.filters.q = e.target.value.trim(); markDirty(); });
 $('#min-size').addEventListener('change', (e) => { state.filters.minBytes = Number(e.target.value); markDirty(); });
 $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; markDirty(); });
 
+$('#detail-back').addEventListener('click', closeGroup);
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#modal').hidden) { $('#modal').hidden = true; return; }
+  if (e.key === 'Escape' && state.view.name === 'group'
+      && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) { closeGroup(); return; }
   if (e.key === '/' && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
     e.preventDefault();
     $('#search').focus();

@@ -1,0 +1,7 @@
+{
+  "hosting": {
+    "public": "landing",
+    "cleanUrls": true,
+    "ignore": ["**/.*"]
+  }
+}
