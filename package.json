@@ -1,0 +1,10 @@
+{
+  "name": "mac-cleaner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local web dashboard that scans macOS for cleanable developer caches and build artifacts",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
