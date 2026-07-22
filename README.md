@@ -18,7 +18,7 @@ Nothing is ever deleted automatically. You decide what goes.
 &nbsp;
 ![Dependencies](https://img.shields.io/badge/dependencies-zero-0ca30c?style=for-the-badge)
 
-<img src="docs/preview.svg" alt="Mac Cleaner — category overview" width="820">
+<img src="docs/screens/overview.png" alt="Mac Cleaner — category overview after a real scan" width="900">
 
 </div>
 
@@ -131,7 +131,7 @@ after enabling, quit and relaunch (the grant applies to newly started processes)
 
 ## How to use it
 
-<img src="docs/detail.svg" alt="Mac Cleaner — drill-down detail view" width="820">
+<img src="docs/screens/detail-system-data.png" alt="Mac Cleaner — System Data drill-down with read-only root-managed items" width="900">
 
 1. **Start Scan.** The worker pool fans out; the disk gauge and category cards populate live
    — no need to wait for the full scan to finish.
@@ -158,6 +158,15 @@ after enabling, quit and relaunch (the grant applies to newly started processes)
   Go module cache, Conda, CocoaPods) — copy with one click.
 - **Keyboard** — `/` focuses search, `Esc` closes a dialog or exits a category.
 - **Deep links** — a category view has its own URL (`#g/xcode`), so browser back/forward work.
+
+## Screenshots
+
+| Category drill-down (Xcode & iOS) | Confirm dialog (Trash-first) |
+|---|---|
+| ![Xcode & iOS detail view](docs/screens/detail-xcode.png) | ![Confirm cleanup dialog](docs/screens/confirm-modal.png) |
+
+*Real captures from a live scan — 220 GB cleanable found on this machine, including 54.7 GB
+of Xcode DerivedData/simulators and 14.3 GB of System Data.*
 
 ## What it scans
 
