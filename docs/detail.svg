@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="420" viewBox="0 0 1000 420" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    .t{fill:#fff;} .m{fill:#898781;} .m2{fill:#c3c2b7;} .mono{font-family:ui-monospace,Menlo,monospace;}
+    .badge{font-size:10px;font-weight:600;}
+  </style>
+  <rect x="0" y="0" width="1000" height="420" rx="16" fill="#0d0d0d"/>
+  <rect x="0.5" y="0.5" width="999" height="419" rx="16" fill="none" stroke="rgba(255,255,255,0.10)"/>
+
+  <!-- back + header -->
+  <rect x="24" y="20" width="150" height="30" rx="8" fill="#232322" stroke="rgba(255,255,255,0.10)"/>
+  <text x="40" y="39" class="t" font-size="13">← All categories</text>
+
+  <!-- group card -->
+  <rect x="24" y="66" width="952" height="330" rx="12" fill="#1a1a19" stroke="rgba(255,255,255,0.10)"/>
+  <rect x="40" y="82" width="16" height="16" rx="3" fill="none" stroke="#3987e5"/>
+  <text x="66" y="95" class="t" font-size="14" font-weight="650">🗄️ System Data</text>
+  <text x="196" y="95" class="m" font-size="12">8 items · 1 filtered out</text>
+  <circle cx="760" cy="90" r="4" fill="#0ca30c"/><text x="770" y="94" fill="#0ca30c" font-size="11">22.3 MB</text>
+  <circle cx="838" cy="90" r="4" fill="#fab219"/><text x="848" y="94" fill="#fab219" font-size="11">14.1 GB</text>
+  <text x="912" y="95" class="t" font-size="14" font-weight="700">14.1 GB</text>
+
+  <!-- rows -->
+  <g font-size="13">
+    <!-- row template: checkbox, name, badges, status, size -->
+    <g transform="translate(0,112)">
+      <rect x="40" y="8" width="15" height="15" rx="3" fill="none" stroke="#55544f"/>
+      <text x="66" y="16" class="t">Swap &amp; sleep image</text>
+      <text x="66" y="32" class="m mono" font-size="11">/System/Volumes/VM</text>
+      <rect x="640" y="6" width="52" height="18" rx="9" fill="none" stroke="rgba(250,178,25,0.5)"/><text x="650" y="19" class="badge" fill="#fab219">caution</text>
+      <rect x="700" y="6" width="92" height="18" rx="9" fill="none" stroke="rgba(236,131,90,0.5)"/><text x="710" y="19" class="badge" fill="#ec835a">root-managed</text>
+      <text x="866" y="19" class="m" font-size="11">read-only</text>
+      <text x="960" y="19" class="t" font-size="13" font-weight="650" text-anchor="end">7.00 GB</text>
+    </g>
+    <line x1="40" y1="152" x2="960" y2="152" stroke="#2c2c2a"/>
+    <g transform="translate(0,160)">
+      <rect x="40" y="8" width="15" height="15" rx="3" fill="none" stroke="#55544f"/>
+      <text x="66" y="16" class="t">macOS update payloads</text>
+      <text x="66" y="32" class="m mono" font-size="11">/Library/Updates</text>
+      <rect x="640" y="6" width="52" height="18" rx="9" fill="none" stroke="rgba(250,178,25,0.5)"/><text x="650" y="19" class="badge" fill="#fab219">caution</text>
+      <rect x="700" y="6" width="92" height="18" rx="9" fill="none" stroke="rgba(236,131,90,0.5)"/><text x="710" y="19" class="badge" fill="#ec835a">root-managed</text>
+      <text x="866" y="19" class="m" font-size="11">read-only</text>
+      <text x="960" y="19" class="t" font-size="13" font-weight="650" text-anchor="end">1.76 GB</text>
+    </g>
+    <line x1="40" y1="200" x2="960" y2="200" stroke="#2c2c2a"/>
+    <g transform="translate(0,208)">
+      <rect x="40" y="8" width="15" height="15" rx="3" fill="none" stroke="#55544f"/>
+      <text x="66" y="16" class="t">Diagnostic reports (system)</text>
+      <text x="66" y="32" class="m mono" font-size="11">/Library/Logs/DiagnosticReports</text>
+      <rect x="640" y="6" width="52" height="18" rx="9" fill="none" stroke="rgba(250,178,25,0.5)"/><text x="650" y="19" class="badge" fill="#fab219">caution</text>
+      <text x="866" y="19" class="m" font-size="11">112 files</text>
+      <text x="960" y="19" class="t" font-size="13" font-weight="650" text-anchor="end">47.1 MB</text>
+    </g>
+    <line x1="40" y1="248" x2="960" y2="248" stroke="#2c2c2a"/>
+    <g transform="translate(0,256)">
+      <rect x="40" y="8" width="15" height="15" rx="3" fill="#3987e5"/><path d="M43 15 l3 3 l6 -7" stroke="#fff" stroke-width="1.6" fill="none"/>
+      <text x="66" y="16" class="t">Homebrew download cache</text>
+      <text x="66" y="32" class="m mono" font-size="11">~/Library/Caches/Homebrew</text>
+      <rect x="640" y="6" width="42" height="18" rx="9" fill="none" stroke="rgba(12,163,12,0.5)"/><text x="650" y="19" class="badge" fill="#0ca30c">safe</text>
+      <text x="866" y="19" class="m" font-size="11">686 files</text>
+      <text x="960" y="19" class="t" font-size="13" font-weight="650" text-anchor="end">21.5 MB</text>
+    </g>
+    <line x1="40" y1="296" x2="960" y2="296" stroke="#2c2c2a"/>
+    <g transform="translate(0,304)">
+      <rect x="40" y="8" width="15" height="15" rx="3" fill="none" stroke="#55544f"/>
+      <text x="66" y="16" class="t">Spotlight index</text>
+      <text x="66" y="32" class="m mono" font-size="11">/System/Volumes/Data/.Spotlight-V100</text>
+      <rect x="640" y="6" width="52" height="18" rx="9" fill="none" stroke="rgba(250,178,25,0.5)"/><text x="650" y="19" class="badge" fill="#fab219">caution</text>
+      <rect x="700" y="6" width="92" height="18" rx="9" fill="none" stroke="rgba(236,131,90,0.5)"/><text x="710" y="19" class="badge" fill="#ec835a">root-managed</text>
+      <text x="860" y="19" class="m" font-size="11">🔒 no access</text>
+      <text x="960" y="19" class="t" font-size="13" font-weight="650" text-anchor="end">0 B</text>
+    </g>
+  </g>
+</svg>
