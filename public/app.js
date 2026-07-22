@@ -433,8 +433,8 @@ function renderGroups() {
       cursor = row;
     };
 
-    if (g.id === 'projects') {
-      // cluster by project: sort projects by total desc, subheader per project
+    if (CLUSTERED.has(g.id)) {
+      // cluster by key (project dir / duplicate set), subheader per cluster
       const byProject = new Map();
       for (const item of vis) {
         const key = item.project || '(other)';
@@ -442,13 +442,13 @@ function renderGroups() {
         byProject.get(key).push(item);
       }
       const clusters = [...byProject.entries()]
-        .map(([proj, items]) => ({ proj, items, total: items.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0) }))
+        .map(([proj, items]) => ({ proj, items, gid: g.id, total: items.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0) }))
         .sort((a, b) => b.total - a.total);
       for (const c of clusters) {
-        const phId = 'ph:' + c.proj;
+        const phId = 'ph:' + g.id + ':' + c.proj;
         seen.add(phId);
         let ph = rowEls.get(phId);
-        if (!ph) { ph = buildProjectHeader(phId, c.proj); rowEls.set(phId, ph); }
+        if (!ph) { ph = buildProjectHeader(phId, c.proj, g.id); rowEls.set(phId, ph); }
         updateProjectHeader(ph, c);
         place(ph);
         for (const item of sortItems(c.items)) {
@@ -476,25 +476,34 @@ function renderGroups() {
   }
 }
 
-function projectItems(proj) {
+// groups whose rows are clustered under sub-headers, keyed by item.project
+const CLUSTERED = new Set(['projects', 'duplicates']);
+
+// duplicates: the cluster checkbox intentionally skips the newest copy, so
+// "tick the set" reclaims space while always keeping one file
+const clusterSelectable = (i) => selectable(i) && !(i.group === 'duplicates' && i.dupNewest);
+
+function projectItems(gid, proj) {
   return [...state.items.values()].filter(i =>
-    i.group === 'projects' && (i.project || '(other)') === proj && passesFilters(i));
+    i.group === gid && (i.project || '(other)') === proj && passesFilters(i));
 }
 
-function buildProjectHeader(phId, proj) {
+function buildProjectHeader(phId, proj, gid) {
   const el = document.createElement('div');
   el.className = 'prow-header';
   el.dataset.id = phId;
+  const dup = gid === 'duplicates';
   el.innerHTML = `
-    <input type="checkbox" aria-label="Select all artifacts of this project">
-    <span class="ph-icon">📁</span>
+    <input type="checkbox" aria-label="${dup ? 'Select all copies except the newest' : 'Select all artifacts of this project'}"
+           title="${dup ? 'Selects every copy except the newest' : 'Select group'}">
+    <span class="ph-icon">${dup ? '👯' : '📁'}</span>
     <span class="ph-name"></span>
     <span class="ph-count"></span>
     <span class="ph-size"></span>`;
   el.querySelector('.ph-name').textContent = proj;
   el.querySelector('input').addEventListener('change', (e) => {
-    for (const i of projectItems(proj)) {
-      if (!selectable(i)) continue;
+    for (const i of projectItems(gid, proj)) {
+      if (!clusterSelectable(i)) continue;
       e.target.checked ? state.selection.add(i.id) : state.selection.delete(i.id);
     }
     markDirty();
@@ -504,8 +513,10 @@ function buildProjectHeader(phId, proj) {
 
 function updateProjectHeader(ph, c) {
   ph.querySelector('.ph-size').textContent = fmtBytes(c.total);
-  ph.querySelector('.ph-count').textContent = `${fmtCount(c.items.length)} artifact${c.items.length === 1 ? '' : 's'}`;
-  const selectableItems = c.items.filter(selectable);
+  ph.querySelector('.ph-count').textContent = c.gid === 'duplicates'
+    ? `${fmtCount(c.items.length)} ${c.items.length === 1 ? 'copy' : 'copies'}`
+    : `${fmtCount(c.items.length)} artifact${c.items.length === 1 ? '' : 's'}`;
+  const selectableItems = c.items.filter(clusterSelectable);
   const sel = selectableItems.filter(i => state.selection.has(i.id)).length;
   const check = ph.querySelector('input');
   check.checked = sel > 0 && sel === selectableItems.length;
@@ -582,7 +593,7 @@ function updateRow(row, item) {
   else if (item.status === 'denied') statusEl.textContent = '🔒 no access';
   else if (item.status === 'error') statusEl.textContent = '⚠ ' + (item.error || 'failed');
   else if (item.displayOnly) statusEl.textContent = 'read-only';
-  else statusEl.textContent = item.files ? fmtCount(item.files) + ' files' : '';
+  else statusEl.textContent = item.files ? fmtCount(item.files) + (item.files === 1 ? ' file' : ' files') : '';
 
   row.querySelector('.r-size').textContent = fmtBytes(item.bytes);
 }
@@ -657,6 +668,7 @@ function renderCards() {
     if (i.displayOnly) s.ro++;
     if (i.status === 'denied') s.denied++;
     if (i.status === 'scanning') s.scanning++;
+    if (i.group === 'duplicates') (s.sets ??= new Set()).add(i.project || '');
     if (state.filters.q) {
       const q = state.filters.q.toLowerCase();
       if (i.name.toLowerCase().includes(q) || i.display.toLowerCase().includes(q)) s.match = true;
@@ -678,6 +690,7 @@ function renderCards() {
     } else {
       c.size.textContent = fmtBytes(s.b);
       const bits = [`${fmtCount(s.n)} item${s.n === 1 ? '' : 's'}`];
+      if (s.sets) bits.push(`${fmtCount(s.sets.size)} set${s.sets.size === 1 ? '' : 's'}`);
       if (s.scanning) bits.push('scanning…');
       if (s.ro) bits.push(`${fmtCount(s.ro)} read-only`);
       if (s.denied) bits.push(`🔒 ${fmtCount(s.denied)}`);
