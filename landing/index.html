@@ -70,13 +70,13 @@
   .mock-bar i { width: 11px; height: 11px; border-radius: 50%; display: block; }
   .mock-bar i:nth-child(1){background:#ff5f57} .mock-bar i:nth-child(2){background:#febc2e} .mock-bar i:nth-child(3){background:#28c840}
   .mock-bar span { margin-left: 8px; font-size: 12px; color: var(--ink-3); }
-  .mock-body { padding: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-  .mcard { background: var(--page); border: 1px solid var(--border); border-radius: 12px; padding: 12px; border-top: 3px solid var(--mc, var(--accent)); text-align: left; }
-  .mcard .t { font-size: 12px; color: var(--ink-2); display: flex; gap: 6px; align-items: center; }
-  .mcard .v { font-size: 18px; font-weight: 700; margin: 4px 0 8px; font-variant-numeric: tabular-nums; }
-  .mbar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--surface-2); }
-  .mbar i { display: block; }
-  .mbar .s { background: var(--safe); } .mbar .c { background: var(--caution); } .mbar .r { background: var(--risky); }
+  .mock-shot { display: block; width: 100%; height: auto; }
+
+  /* screenshots strip */
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+  .shot { margin: 0; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--surface); }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot figcaption { padding: 12px 16px; font-size: 13.5px; color: var(--ink-2); border-top: 1px solid var(--border); }
 
   section { padding: 74px 0 10px; }
   .sec-h { font-size: clamp(24px, 3.4vw, 32px); margin-bottom: 10px; }
@@ -130,6 +130,7 @@
   <div class="nav-inner">
     <a class="nav-brand" href="#">🧹 Mac Cleaner</a>
     <div class="nav-links">
+      <a href="#screenshots">Screenshots</a>
       <a href="#features">Features</a>
       <a href="#security">Security</a>
       <a href="#faq">FAQ</a>
@@ -150,18 +151,27 @@
   </div>
   <div class="hero-sub">Free & open source · Apple Silicon · macOS 12+ · no account, no telemetry</div>
 
-  <div class="mock" aria-hidden="true">
+  <div class="mock">
     <div class="mock-bar"><i></i><i></i><i></i><span>Mac Cleaner — 220 GB cleanable found</span></div>
-    <div class="mock-body">
-      <div class="mcard" style="--mc:#3987e5"><div class="t">🔨 Xcode &amp; iOS</div><div class="v">54.7 GB</div><div class="mbar"><i class="s" style="width:55%"></i><i class="c" style="width:35%"></i><i class="r" style="width:10%"></i></div></div>
-      <div class="mcard" style="--mc:#199e70"><div class="t">🤖 Android &amp; JVM</div><div class="v">59.3 GB</div><div class="mbar"><i class="s" style="width:40%"></i><i class="c" style="width:45%"></i><i class="r" style="width:15%"></i></div></div>
-      <div class="mcard" style="--mc:#c98500"><div class="t">🗄️ System Data</div><div class="v">14.1 GB</div><div class="mbar"><i class="s" style="width:10%"></i><i class="c" style="width:90%"></i></div></div>
-      <div class="mcard" style="--mc:#9085e9"><div class="t">📦 Build Artifacts</div><div class="v">48.2 GB</div><div class="mbar"><i class="s" style="width:80%"></i><i class="c" style="width:20%"></i></div></div>
-      <div class="mcard" style="--mc:#d55181"><div class="t">🐳 Docker &amp; VMs</div><div class="v">1.43 GB</div><div class="mbar"><i class="r" style="width:100%"></i></div></div>
-      <div class="mcard" style="--mc:#e66767"><div class="t">🧰 App Caches</div><div class="v">12.8 GB</div><div class="mbar"><i class="s" style="width:70%"></i><i class="c" style="width:30%"></i></div></div>
-    </div>
+    <img class="mock-shot" src="assets/overview.png" alt="Mac Cleaner overview — category cards with safety-split bars after a real scan" loading="eager">
   </div>
 </header>
+
+<section id="screenshots" class="wrap">
+  <h2 class="sec-h">See it work</h2>
+  <p class="sec-p">Real captures from a live scan — drill into a category, review every path,
+     and confirm exactly what goes (Trash-first, restorable).</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="assets/detail-system-data.png" alt="System Data drill-down: swap, update payloads and system caches shown read-only with safety badges" loading="lazy">
+      <figcaption>System Data, itemized — root-managed paths stay read-only.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="assets/confirm-modal.png" alt="Confirm cleanup dialog listing 64 selected items totaling 60.5 GB before moving to Trash" loading="lazy">
+      <figcaption>Nothing is deleted without this dialog — and your click.</figcaption>
+    </figure>
+  </div>
+</section>
 
 <section id="features" class="wrap">
   <h2 class="sec-h">Built for developer machines</h2>
