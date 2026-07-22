@@ -65,6 +65,10 @@ surfaces the **exact terminal command** instead of a fake delete button.
 
 - 🖥️ **App *and* dashboard, one codebase** — install the `.dmg` or run `npm start`. Same
   scanner, same UI, same security model.
+- 🏠 **For every Mac user, not just developers** — duplicate-file finder (checksum-verified,
+  always keeps the newest copy), a Biggest Files explorer sorted largest-first across your
+  whole home folder including Movies/Music/Pictures, screenshots piling up on the Desktop,
+  and Downloads you haven't touched in months.
 - 🗂️ **CleanMyMac-style overview** — a card per category with total size, item count and a
   safety-split bar; click to drill into the file list.
 - 🚦 **Safety-classified, always manual** — every item is `safe` / `caution` / `risky`,
@@ -165,16 +169,23 @@ after enabling, quit and relaunch (the grant applies to newly started processes)
 |---|---|
 | ![Xcode & iOS detail view](docs/screens/detail-xcode.png) | ![Confirm cleanup dialog](docs/screens/confirm-modal.png) |
 
+| Duplicate sets — keeps the newest copy |
+|---|
+| ![Duplicate Files detail view](docs/screens/detail-duplicates.png) |
+
 *Real captures from a live scan — 220 GB cleanable found on this machine, including 54.7 GB
 of Xcode DerivedData/simulators and 14.3 GB of System Data.*
 
 ## What it scans
 
-21 categories, covering mobile, web, backend, game and ML tooling:
+23 categories — for developers **and** everyone else:
 
 | | Category | Examples |
 |---|---|---|
 | 🗑️ | **Trash** | The system Trash (per-volume) |
+| 🐋 | **Biggest Files** | Every file ≥ 50 MB across your home folder — including Movies, Music and Pictures — sorted largest-first. Media libraries shown read-only. |
+| 👯 | **Duplicate Files** | Identical files (same size + checksum) clustered into sets; one click selects every copy except the newest |
+| 🏠 | **Personal & Media** | Screenshots on the Desktop, Downloads untouched for 90+ days, Mail attachment copies |
 | 🗄️ | **System Data** | iOS device updates, Homebrew cache, diagnostic reports, update payloads, local snapshots, system caches |
 | 🔨 | **Xcode & iOS** | `DerivedData`, Archives, device support, simulators, caches |
 | 🤖 | **Android & JVM** | Gradle caches & wrappers, AVDs, NDK, `.m2`, Kotlin/KTS |
@@ -192,7 +203,6 @@ of Xcode DerivedData/simulators and 14.3 GB of System Data.*
 | 🧹 | **User App Caches** | Generic `~/Library/Caches` sweep |
 | 🖥️ | **System Caches & Logs** | User-owned system caches and logs |
 | 🏗️ | **Project Build Artifacts** | `node_modules`, `build`, `.next`, `Pods`, `target`, `.venv`, ~25 patterns |
-| 🐘 | **Large Files (500 MB+)** | Big files anywhere in `$HOME` |
 | 📲 | **App Binaries** | `.apk` / `.aab` / `.ipa` ≥ 5 MB |
 | 💿 | **Installers & Disk Images** | Leftover `.dmg` / `.pkg` in Downloads |
 

@@ -83,6 +83,7 @@ function publicItem(i) {
     error: i.error || null, mtime: i.mtime || null,
     project: i.project ? (i.project.startsWith(HOME) ? '~' + i.project.slice(HOME.length) : i.project) : null,
     projectName: i.projectName || null,
+    dupNewest: !!i.dupNewest,
     noTotal: !!i.noTotal,
   };
 }
