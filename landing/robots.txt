@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://eslamfaisal.github.io/mac-cleaner/sitemap.xml

@@ -12,7 +12,7 @@ Nothing is ever deleted automatically. You decide what goes.
 
 [![Download](https://img.shields.io/badge/⬇_Download-Mac.Cleaner.dmg-3987e5?style=for-the-badge)](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)
 &nbsp;
-![Platform](https://img.shields.io/badge/macOS-12%2B_·_Apple_Silicon-1a1a19?style=for-the-badge)
+![Platform](https://img.shields.io/badge/macOS-12%2B_·_Universal_(Apple_Silicon_%26_Intel)-1a1a19?style=for-the-badge)
 &nbsp;
 ![License](https://img.shields.io/badge/License-MIT-0ca30c?style=for-the-badge)
 &nbsp;
@@ -29,6 +29,7 @@ Nothing is ever deleted automatically. You decide what goes.
 - [Why](#why)
 - [Highlights](#highlights)
 - [Two ways to run it](#two-ways-to-run-it)
+- [Which download? Apple Silicon vs Intel](#which-download-apple-silicon-vs-intel)
 - [Install the app (DMG)](#install-the-app-dmg)
 - [Full Disk Access](#full-disk-access)
 - [How to use it](#how-to-use-it)
@@ -97,6 +98,39 @@ surfaces the **exact terminal command** instead of a fake delete button.
 Both run the identical local server. The app is just a ~180-line Swift `WKWebView` shell —
 it exists so macOS attributes Full Disk Access to *"Mac Cleaner"* instead of your terminal.
 
+## Which download? Apple Silicon vs Intel
+
+**Short answer: download [`Mac.Cleaner.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg) — it works on every Mac.**
+
+Since **v1.3.0** the main DMG is a **Universal 2** binary: the app *and* its bundled Node
+runtime contain both an `arm64` (Apple Silicon) and an `x86_64` (Intel) slice, and macOS
+automatically runs the native one for your machine — no Rosetta, no picking, full native
+speed on both. Because carrying both slices makes the download bigger, each release also
+ships two smaller single-architecture DMGs:
+
+| Asset | Runs on | Native on | Size |
+|---|---|---|---|
+| [`Mac.Cleaner.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg) **(recommended)** | **Every Mac** (macOS 12+) | Apple Silicon **and** Intel | ~80 MB |
+| [`Mac.Cleaner-AppleSilicon.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner-AppleSilicon.dmg) | Apple Silicon only (M1/M2/M3/M4…) | Apple Silicon | ~40 MB |
+| [`Mac.Cleaner-Intel.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner-Intel.dmg) | Intel only | Intel | ~45 MB |
+
+**Not sure which chip you have?**  → **About This Mac**. "Chip: Apple M…" means
+Apple Silicon; "Processor: Intel…" means Intel. Or run `uname -m` in Terminal
+(`arm64` = Apple Silicon, `x86_64` = Intel). When in doubt, the universal DMG is
+always correct.
+
+> **"Bad CPU type in executable" / app won't open on Intel?** You have a pre-1.3.0
+> download — those were Apple Silicon-only. Grab the latest
+> [`Mac.Cleaner.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)
+> and replace the app.
+
+Verify what you downloaded any time:
+
+```sh
+lipo -archs "/Applications/Mac Cleaner.app/Contents/MacOS/Mac Cleaner"
+# universal → x86_64 arm64
+```
+
 ## Install the app (DMG)
 
 1. **Download** [`Mac.Cleaner.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)
@@ -116,8 +150,9 @@ it exists so macOS attributes Full Disk Access to *"Mac Cleaner"* instead of you
 4. (Optional but recommended) **Grant Full Disk Access** — see below. The app walks you
    through it on first run and detects the grant live.
 
-> **Apple Silicon** build. On Intel, [run from source](#run-from-source-web-dashboard) or
-> [build it yourself](#build-the-app--dmg-yourself) with an x64 Node.
+> **Works on Apple Silicon and Intel** — the main DMG is a universal binary.
+> See [Which download?](#which-download-apple-silicon-vs-intel) for the smaller
+> single-architecture options.
 
 ## Full Disk Access
 
@@ -280,20 +315,28 @@ Requires **Xcode** (for `swiftc`); everything else is stock macOS tooling (`sips
 `iconutil`, `codesign`, `hdiutil`).
 
 ```sh
-./build-app.sh
+./build-app.sh                 # universal app (Apple Silicon + Intel) — the default
 # → dist/Mac Cleaner.app  +  dist/Mac.Cleaner.dmg
+
+./build-app.sh --arch arm64    # Apple Silicon-only  → dist/Mac.Cleaner-AppleSilicon.dmg
+./build-app.sh --arch x64      # Intel-only          → dist/Mac.Cleaner-Intel.dmg
+./build-app.sh --arch all      # all three DMGs (what releases ship)
 ```
 
-What it does: compiles the Swift wrapper, builds the icon and `Info.plist` from `VERSION`,
-copies the server (`server.js`, `lib/`, `public/`), **bundles a self-contained Node runtime**,
-code-signs, and produces a DMG with an `/Applications` drop symlink.
+What it does: compiles the Swift wrapper (for universal: once per architecture, merged
+with `lipo`), builds the icon and `Info.plist` from `VERSION`, copies the server
+(`server.js`, `lib/`, `public/`), **bundles a self-contained Node runtime** (for
+universal: the official nodejs.org `darwin-arm64` and `darwin-x64` builds fused into one
+fat binary with `lipo`), code-signs, and produces a DMG with an `/Applications` drop
+symlink. Fetched Node builds are cached in `.node-cache/`.
 
-| Env var | Effect |
+| Option / env var | Effect |
 |---|---|
-| `NODE_BIN=/path/to/node` | Bundle a specific Node (e.g. an **x64** build for Intel). |
-| `NODE_DIST_VERSION=v22.12.0` | Which official Node to fetch if your local one isn't portable. |
+| `--arch universal\|arm64\|x64\|all` | Which architecture(s) to build. Default `universal`. |
+| `NODE_DIST_VERSION=v22.12.0` | Which official Node version to bundle. |
+| `NODE_BIN=/path/to/node` | *(single-arch builds only)* bundle this Node instead of fetching. |
 | `SIGN_ID="Developer ID Application: …"` | Proper signing instead of ad-hoc. |
-| `NOTARY_PROFILE=<profile>` | With `SIGN_ID`, also notarize + staple the DMG. |
+| `NOTARY_PROFILE=<profile>` | With `SIGN_ID`, also notarize + staple the DMGs. |
 
 > **Why it may download Node:** Homebrew's `node` links dylibs from the Cellar
 > (`@rpath/libnode…`) that don't exist on other machines. When the build detects a
@@ -306,20 +349,21 @@ code-signs, and produces a DMG with an `/Applications` drop symlink.
 # 1. bump the version
 echo 1.1.1 > VERSION
 
-# 2. build the artifacts
-./build-app.sh
+# 2. build all three DMGs (universal + Apple Silicon + Intel)
+./build-app.sh --arch all
 
 # 3. tag and publish
 git commit -am "Release v$(cat VERSION)"
 git tag "v$(cat VERSION)"
 git push && git push --tags
-gh release create "v$(cat VERSION)" dist/Mac.Cleaner.dmg \
+gh release create "v$(cat VERSION)" \
+  dist/Mac.Cleaner.dmg dist/Mac.Cleaner-AppleSilicon.dmg dist/Mac.Cleaner-Intel.dmg \
   --title "Mac Cleaner v$(cat VERSION)" --notes "…"
 ```
 
-The download button everywhere points at the **version-less** asset URL
-`releases/latest/download/Mac.Cleaner.dmg`, so it always resolves to the newest release —
-no link changes needed.
+The download buttons everywhere point at **version-less** asset URLs
+(`releases/latest/download/Mac.Cleaner.dmg`, `…-AppleSilicon.dmg`, `…-Intel.dmg`), so they
+always resolve to the newest release — no link changes needed.
 
 ## Landing page
 
@@ -405,10 +449,22 @@ so it never collides with a manual `npm start`. To change the source port:
 </details>
 
 <details>
-<summary><b>I'm on an Intel Mac</b></summary>
+<summary><b>I'm on an Intel Mac / "Bad CPU type in executable"</b></summary>
 
-The prebuilt DMG is Apple Silicon. Either [run from source](#run-from-source-web-dashboard),
-or build with an x64 Node: `NODE_BIN=/path/to/x64/node ./build-app.sh`.
+Since **v1.3.0** the main `Mac.Cleaner.dmg` is a **universal binary** — it runs natively on
+Intel and Apple Silicon. If you see *"Bad CPU type in executable"* or the app won't launch
+on Intel, you have an old (pre-1.3.0, Apple Silicon-only) download: get the
+[latest DMG](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)
+and replace the app. A smaller Intel-only build also exists — see
+[Which download?](#which-download-apple-silicon-vs-intel).
+</details>
+
+<details>
+<summary><b>Which chip does my Mac have?</b></summary>
+
+ → **About This Mac**: "Chip: Apple M…" = Apple Silicon, "Processor: Intel…" = Intel.
+Or `uname -m` in Terminal: `arm64` = Apple Silicon, `x86_64` = Intel. If unsure, the
+universal `Mac.Cleaner.dmg` works on both.
 </details>
 
 <details>
