@@ -3,9 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mac Cleaner — open-source disk cleanup for developers</title>
-<meta name="description" content="Free, open-source Mac disk cleaner for developers. Scans Xcode, Gradle, Flutter, npm, Docker caches and System Data. 100% local, zero dependencies, nothing deleted without you.">
+<title>Mac Cleaner — free open-source disk cleanup for macOS (Apple Silicon &amp; Intel)</title>
+<meta name="description" content="Free, open-source Mac disk cleaner. Find duplicate files, your biggest files, and clean System Data, Xcode, Gradle, Flutter, npm and Docker caches. Universal app for Apple Silicon (M1/M2/M3/M4) and Intel Macs. 100% local and private — nothing is deleted without your click.">
+<meta name="keywords" content="mac cleaner, free mac cleaner, open source mac cleaner, macos disk cleanup, clean system data mac, system data storage mac, duplicate file finder mac, disk space analyzer mac, xcode deriveddata cleanup, clear xcode cache, node_modules cleanup, gradle cache cleanup, docker cache mac, free up disk space mac, cleanmymac alternative, apple silicon, intel mac, m1 m2 m3 m4">
+<meta name="author" content="Eslam Faisal">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0d0d0d">
+<link rel="canonical" href="https://eslamfaisal.github.io/mac-cleaner/">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mac Cleaner">
+<meta property="og:title" content="Mac Cleaner — free open-source disk cleanup for macOS">
+<meta property="og:description" content="Find what is eating your disk — duplicates, biggest files, System Data, developer caches. Universal app for Apple Silicon &amp; Intel. 100% local, nothing deleted without you.">
+<meta property="og:url" content="https://eslamfaisal.github.io/mac-cleaner/">
+<meta property="og:image" content="https://eslamfaisal.github.io/mac-cleaner/assets/overview.png">
+<meta property="og:image:alt" content="Mac Cleaner dashboard — category overview after a real scan">
+<meta property="og:locale" content="en_US">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mac Cleaner — free open-source disk cleanup for macOS">
+<meta name="twitter:description" content="Duplicates, biggest files, System Data, developer caches — scanned locally, deleted only by you. Universal: Apple Silicon &amp; Intel.">
+<meta name="twitter:image" content="https://eslamfaisal.github.io/mac-cleaner/assets/overview.png">
+
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧹</text></svg>">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Mac Cleaner",
+  "operatingSystem": "macOS 12.0 or later (Universal: Apple Silicon and Intel)",
+  "applicationCategory": "UtilitiesApplication",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "description": "Free, open-source disk cleanup dashboard for macOS. Finds duplicate files, biggest files, System Data, and developer caches (Xcode, Gradle, Flutter, npm, Docker). Runs 100% locally; nothing is deleted without explicit user confirmation.",
+  "url": "https://eslamfaisal.github.io/mac-cleaner/",
+  "downloadUrl": "https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg",
+  "softwareVersion": "1.3.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "screenshot": "https://eslamfaisal.github.io/mac-cleaner/assets/overview.png",
+  "author": { "@type": "Person", "name": "Eslam Faisal", "url": "https://github.com/eslamfaisal" }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Does Mac Cleaner work on both Apple Silicon and Intel Macs?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes. Since v1.3.0 the main DMG is a universal binary that runs natively on Apple Silicon (M1/M2/M3/M4) and Intel Macs. Smaller single-architecture downloads are also available on the releases page." }
+    },
+    {
+      "@type": "Question",
+      "name": "Is Mac Cleaner free?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes — completely free and open source under the MIT license. No account, no telemetry, no in-app purchases." }
+    },
+    {
+      "@type": "Question",
+      "name": "Will Mac Cleaner ever delete something by itself?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. Scanning is read-only. Deletion happens only for items you selected, after a confirmation dialog and a second server-side validation pass. Risky items require an extra explicit acknowledgment." }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I clean System Data storage on my Mac?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Mac Cleaner itemizes System Data: old iOS device updates, Time Machine local snapshots, system caches, update payloads and diagnostic reports — each sized and explained. Root-managed paths stay read-only and you get the exact terminal command instead." }
+    }
+  ]
+}
+</script>
 <style>
   :root {
     --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232322;
@@ -150,7 +218,7 @@
     <a class="btn btn-primary btn-lg" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg">⬇ Download for macOS</a>
     <a class="btn btn-lg" href="https://github.com/eslamfaisal/mac-cleaner">View source on GitHub</a>
   </div>
-  <div class="hero-sub">Free & open source · Apple Silicon · macOS 12+ · no account, no telemetry</div>
+  <div class="hero-sub">Free &amp; open source · Universal — Apple Silicon &amp; Intel · macOS 12+ · no account, no telemetry</div>
 
   <div class="mock">
     <div class="mock-bar"><i></i><i></i><i></i><span>Mac Cleaner — 220 GB cleanable found</span></div>
@@ -267,9 +335,13 @@ npm start   # → http://127.0.0.1:4545</code></pre>
        an extra explicit acknowledgment.</p>
   </details>
   <details>
-    <summary>Intel Mac?</summary>
-    <p>The prebuilt DMG is Apple Silicon. On Intel, run from source, or build the app yourself
-       with <code>NODE_BIN</code> pointing at an x64 Node: <code>./build-app.sh</code>.</p>
+    <summary>Does it work on Intel Macs and Apple Silicon (M1/M2/M3/M4)?</summary>
+    <p>Yes — the main <code>Mac.Cleaner.dmg</code> is a <b>universal binary</b>: it contains
+       native code for both Apple Silicon and Intel, and macOS runs the right one
+       automatically. Prefer a smaller download? Grab the chip-specific
+       <code>Mac.Cleaner-AppleSilicon.dmg</code> or <code>Mac.Cleaner-Intel.dmg</code> from
+       the <a href="https://github.com/eslamfaisal/mac-cleaner/releases/latest">releases page</a>.
+       Seeing "Bad CPU type" on Intel? That's a pre-1.3.0 download — update to the latest.</p>
   </details>
 </section>
 
@@ -277,10 +349,13 @@ npm start   # → http://127.0.0.1:4545</code></pre>
   <h2 class="sec-h">Free. Open source. Yours.</h2>
   <p class="sec-p" style="margin:0 auto">Download the app, or read every line first — both are the same code.</p>
   <div class="btns">
-    <a class="btn btn-primary btn-lg" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg">⬇ Download Mac Cleaner.dmg</a>
+    <a class="btn btn-primary btn-lg" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg">⬇ Download — works on every Mac</a>
     <a class="btn btn-lg" href="https://github.com/eslamfaisal/mac-cleaner/releases/latest">All releases</a>
     <a class="btn btn-lg" href="https://github.com/eslamfaisal/mac-cleaner">Star on GitHub ★</a>
   </div>
+  <p class="hero-sub">Universal binary (Apple Silicon &amp; Intel). Smaller chip-specific downloads:
+    <a href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner-AppleSilicon.dmg">Apple&nbsp;Silicon</a> ·
+    <a href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner-Intel.dmg">Intel</a></p>
 </section>
 
 <footer>
