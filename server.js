@@ -156,7 +156,7 @@ const BANNED_EXACT = new Set([
   path.join(HOME, 'Library/Caches'), path.join(HOME, 'Library/Developer'),
   path.join(HOME, 'Library/Keychains'), path.join(HOME, 'Library/Preferences'),
 ]);
-const ALLOWED_ROOTS = [HOME + '/', '/Library/Caches/', '/Library/Logs/'];
+const ALLOWED_ROOTS = [HOME + '/', '/Library/Caches/', '/Library/Logs/', '/Applications/'];
 
 function validateDeletablePath(p) {
   // Throws with a reason when the path must not be deleted.
@@ -165,6 +165,13 @@ function validateDeletablePath(p) {
   if (norm.includes('..')) throw new Error('invalid path');
   if (BANNED_EXACT.has(norm)) throw new Error('protected path');
   if (!ALLOWED_ROOTS.some(r => norm.startsWith(r))) throw new Error('outside allowed roots');
+  if (norm.startsWith('/Applications/')) {
+    // only whole .app bundles directly inside /Applications, nothing else
+    if (!(norm.endsWith('.app') && norm.split('/').filter(Boolean).length === 2)) {
+      throw new Error('only .app bundles can be deleted from /Applications');
+    }
+    return norm;
+  }
   if (norm.split('/').filter(Boolean).length < 3) throw new Error('path too shallow');
   // Keychains / Preferences must never be reachable even via subpaths
   for (const banned of ['/Library/Keychains/', '/Library/Preferences/']) {

@@ -204,23 +204,33 @@ after enabling, quit and relaunch (the grant applies to newly started processes)
 |---|---|
 | ![Xcode & iOS detail view](docs/screens/detail-xcode.png) | ![Confirm cleanup dialog](docs/screens/confirm-modal.png) |
 
+| Applications — old, unused, superseded |
+|---|
+| ![Old and unused applications view](docs/screens/detail-applications.png) |
+
+| Leftovers from apps that are no longer installed |
+|---|
+| ![Leftovers from uninstalled apps view](docs/screens/detail-leftovers.png) |
+
 | Duplicate sets — keeps the newest copy |
 |---|
 | ![Duplicate Files detail view](docs/screens/detail-duplicates.png) |
 
-*Real captures from a live scan — 220 GB cleanable found on this machine, including 54.7 GB
-of Xcode DerivedData/simulators and 14.3 GB of System Data.*
+*Real captures from a live scan — 197 GB cleanable found on this machine, including 2.31 GB
+of old/superseded app data and 2.16 GB of leftovers from apps that were uninstalled long ago.*
 
 ## What it scans
 
-23 categories — for developers **and** everyone else:
+26 categories — for developers **and** everyone else:
 
 | | Category | Examples |
 |---|---|---|
 | 🗑️ | **Trash** | The system Trash (per-volume) |
 | 🐋 | **Biggest Files** | Every file ≥ 50 MB across your home folder — including Movies, Music and Pictures — sorted largest-first. Media libraries shown read-only. |
 | 👯 | **Duplicate Files** | Identical files (same size + checksum) clustered into sets; one click selects every copy except the newest |
-| 🏠 | **Personal & Media** | Screenshots on the Desktop, Downloads untouched for 90+ days, Mail attachment copies |
+| 🏠 | **Personal & Media** | Screenshots on the Desktop, Downloads untouched for 90+ days, Mail attachment copies, Podcast/Books downloads |
+| ⏳ | **Applications — Old & Unused** | Apps with no sign of use for 6+ months, duplicate installs of the same app, superseded per-version IDE data (Android Studio / JetBrains), old JetBrains Toolbox builds, forgotten 12 GB macOS installers |
+| 👻 | **Leftovers from Uninstalled Apps** | `Application Support` / `Containers` folders whose app is no longer installed |
 | 🗄️ | **System Data** | iOS device updates, Homebrew cache, diagnostic reports, update payloads, local snapshots, system caches |
 | 🔨 | **Xcode & iOS** | `DerivedData`, Archives, device support, simulators, caches |
 | 🤖 | **Android & JVM** | Gradle caches & wrappers, AVDs, NDK, `.m2`, Kotlin/KTS |
@@ -228,11 +238,12 @@ of Xcode DerivedData/simulators and 14.3 GB of System Data.*
 | 📦 | **JavaScript & Node** | npm / pnpm / yarn stores, Bun, `node_modules` |
 | 🐍 | **Python** | pip cache, virtualenvs, `__pycache__`, Conda |
 | ⚙️ | **Go · Rust · Other Languages** | Go module cache, Cargo, and more |
-| 🎮 | **Game Engines** | Unity, Unreal caches & derived data |
+| 🎮 | **Games & Game Engines** | Unity, Unreal, Steam libraries, shader & download caches |
+| 🎬 | **Creative — Video · Photo · Audio · Design** | Adobe media cache, DaVinci Resolve render cache & proxies, Final Cut backups, Camera Raw / Lightroom previews, Capture One, Sketch, Figma, Logic & GarageBand sound libraries |
 | 🐳 | **Docker & VMs** | Docker.raw / disk images, VM disks |
 | 💻 | **IDEs & Editors** | JetBrains, VS Code, Android Studio caches |
 | 🌐 | **Browsers** | Chrome / Safari / Firefox caches |
-| 💬 | **App Caches & Data** | Slack, Spotify, Discord, communication apps |
+| 💬 | **App Caches & Data** | Slack, Teams, Outlook, Office, Spotify, Discord, Drive / OneDrive caches |
 | 🧠 | **AI & ML** | Model caches and toolchain data |
 | 📱 | **Device Backups** | iOS/iPadOS backups (⚠️ risky) |
 | 🧹 | **User App Caches** | Generic `~/Library/Caches` sweep |
@@ -240,6 +251,33 @@ of Xcode DerivedData/simulators and 14.3 GB of System Data.*
 | 🏗️ | **Project Build Artifacts** | `node_modules`, `build`, `.next`, `Pods`, `target`, `.venv`, ~25 patterns |
 | 📲 | **App Binaries** | `.apk` / `.aab` / `.ipa` ≥ 5 MB |
 | 💿 | **Installers & Disk Images** | Leftover `.dmg` / `.pkg` in Downloads |
+
+### Old & unused applications — how it decides
+
+`Applications — Old & Unused` never guesses from a single signal. For every bundle in
+`/Applications` and `~/Applications` it combines:
+
+- **Spotlight** `kMDItemLastUsedDate`, `kMDItemVersion`, `kMDItemCFBundleIdentifier` (batched `mdls`)
+- the **preferences plist mtime** (`~/Library/Preferences/<bundle-id>.plist`) — catches apps Spotlight has no launch record for
+- the **running process list** (`ps`) — a running app is never listed, whatever the dates say
+
+An app is flagged only when *every* signal is 6+ months old. Two extra cases are flagged
+regardless of age: a **duplicate install** (the same bundle id present twice — the older
+version is the one listed) and a **macOS installer** sitting in `/Applications`.
+
+Apple's own apps (`com.apple.*`) and the running Mac Cleaner bundle are skipped. Deletion
+from `/Applications` is restricted server-side to whole `.app` bundles at the top level —
+nothing else under `/Applications` can be touched.
+
+The same idea applies to per-version IDE data: Android Studio and JetBrains IDEs keep a
+separate settings/cache folder per version (`AndroidStudio2025.2.3`, `IntelliJIdea2024.3`, …)
+and never clean up after an upgrade. Only folders that are **not** the newest of their
+product are listed, with the superseding version named in the badge.
+
+`Leftovers from Uninstalled Apps` matches every `~/Library/Application Support` and
+`~/Library/Containers` folder against the names and bundle ids of installed apps. The match
+is deliberately loose so anything ambiguous stays out, folders touched in the last 60 days
+are skipped, and what remains is still marked `caution` — command-line tools live there too.
 
 The **Project Build Artifacts** walker is gated on sibling files (e.g. `build/` only counts
 next to `pubspec.yaml` / `gradlew` / `package.json`) to avoid false positives on
