@@ -174,6 +174,9 @@ function buildGroupSections() {
         <span class="g-size"></span>
       </div>
       <div class="group-body"></div>`;
+    section.querySelector('.g-hidden').addEventListener('click', () => {
+      if (activeFilterLabels().length) clearFilters();
+    });
     const check = section.querySelector('input');
     check.addEventListener('change', () => {
       // operate on ALL selectable items of the group (not just filtered-visible
@@ -236,6 +239,37 @@ function passesFilters(i) {
 
 function visibleItems() {
   return [...state.items.values()].filter(passesFilters);
+}
+
+// A group reading "0 items (3 filtered out)" is baffling when the filter that
+// hid them (a safety tile, the size dropdown) is scrolled out of view — so the
+// active filters are always spelled out, and one click clears them.
+function activeFilterLabels() {
+  const out = [];
+  if (state.filters.safety) out.push(state.filters.safety);
+  if (state.filters.minBytes > 0) out.push('≥ ' + fmtBytes(state.filters.minBytes));
+  if (state.filters.q) out.push(`“${state.filters.q}”`);
+  return out;
+}
+
+function clearFilters() {
+  state.filters.safety = null;
+  state.filters.minBytes = 0;
+  state.filters.q = '';
+  $('#search').value = '';
+  $('#min-size').value = '0';
+  markDirty();
+}
+
+function renderFilterChip() {
+  const chip = $('#clear-filters');
+  const labels = activeFilterLabels();
+  const hidden = [...state.items.values()].filter(i => i.status !== 'missing' && !passesFilters(i)).length;
+  chip.hidden = !labels.length || hidden === 0;
+  if (!chip.hidden) {
+    chip.textContent = `${fmtCount(hidden)} hidden by: ${labels.join(' · ')} — clear ✕`;
+    chip.title = 'Clear the size, safety and text filters';
+  }
 }
 
 // ------------------------------------------------------------- render -----
@@ -340,13 +374,32 @@ function renderSummary() {
   }
   $('#tile-total .tile-value').textContent = fmtBytes(totals.all);
 
-  // live label: what "Select all safe" would actually grab (same exclusions)
+  // live label: what "Select all safe" would actually grab (same exclusions),
+  // plus WHY the rest of the safe total is not in it — the two numbers looking
+  // unrelated is otherwise the most confusing thing on the screen
   let bulkSafe = 0;
+  const skipped = { active: 0, trash: 0, other: 0 };
   for (const i of state.items.values()) {
-    if (i.safety === 'safe' && selectable(i) && !i.permanentOnly && !i.noTotal
-        && !(i.badges || []).includes('active project')) bulkSafe += i.bytes;
+    if (i.safety !== 'safe' || ['deleted', 'gone', 'missing'].includes(i.status) || i.noTotal) continue;
+    if (!selectable(i)) { skipped.other += i.bytes; continue; }
+    if (i.permanentOnly) { skipped.trash += i.bytes; continue; }
+    if ((i.badges || []).includes('active project')) { skipped.active += i.bytes; continue; }
+    bulkSafe += i.bytes;
   }
   $('#select-safe').textContent = bulkSafe > 0 ? `Select all safe (${fmtBytes(bulkSafe)})` : 'Select all safe';
+
+  const reasons = [];
+  if (skipped.active > 0) reasons.push(`${fmtBytes(skipped.active)} in active projects`);
+  if (skipped.trash > 0) reasons.push(`${fmtBytes(skipped.trash)} in Trash (permanent)`);
+  if (skipped.other > 0) reasons.push(`${fmtBytes(skipped.other)} read-only`);
+  const sub = $('#safe-sub');
+  sub.textContent = reasons.length
+    ? `${fmtBytes(bulkSafe)} in one click — ${reasons.join(', ')} must be picked by hand`
+    : '';
+  $('#select-safe').title = reasons.length
+    ? `Skips ${reasons.join(', ')}. Select those items individually if you want them.`
+    : 'Select every item classified safe';
+  renderFilterChip();
 
   for (const s of ['safe', 'caution', 'risky']) {
     const tile = document.querySelector(`.tile-safety[data-safety="${s}"]`);
@@ -416,7 +469,11 @@ function renderGroups() {
       .join('');
     els.count.textContent = `${fmtCount(vis.length)} item${vis.length === 1 ? '' : 's'}`;
     const hiddenCount = all.length - vis.length;
-    els.hidden.textContent = hiddenCount > 0 ? `(${fmtCount(hiddenCount)} filtered out)` : '';
+    // clickable: the filter that hid them is often scrolled off-screen
+    els.hidden.textContent = hiddenCount > 0
+      ? `(${fmtCount(hiddenCount)} filtered out — show)` : '';
+    els.hidden.classList.toggle('clickable', hiddenCount > 0);
+    els.hidden.title = hiddenCount > 0 ? `Hidden by: ${activeFilterLabels().join(' · ')}. Click to clear filters.` : '';
 
     const selectableAll = all.filter(selectable);
     const selCount = selectableAll.filter(i => state.selection.has(i.id)).length;
@@ -823,6 +880,7 @@ $('#fda-lock').addEventListener('click', () => {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
+$('#clear-filters').addEventListener('click', clearFilters);
 $('#search').addEventListener('input', (e) => { state.filters.q = e.target.value.trim(); markDirty(); });
 $('#min-size').addEventListener('change', (e) => { state.filters.minBytes = Number(e.target.value); markDirty(); });
 $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; markDirty(); });

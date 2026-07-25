@@ -64,7 +64,7 @@
   <section class="summary" id="summary" hidden>
     <div class="tiles">
       <div class="tile" id="tile-total"><div class="tile-value">0 B</div><div class="tile-label">cleanable found</div></div>
-      <button class="tile tile-safety" data-safety="safe"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-safe"></span>safe</div></button>
+      <button class="tile tile-safety" data-safety="safe"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-safe"></span>safe</div><div class="tile-sub" id="safe-sub"></div></button>
       <button class="tile tile-safety" data-safety="caution"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-caution"></span>caution</div></button>
       <button class="tile tile-safety" data-safety="risky"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-risky"></span>risky</div></button>
     </div>
@@ -90,6 +90,7 @@
       <option value="age">Sort: oldest</option>
     </select>
     <span class="scan-meta muted" id="scan-meta"></span>
+    <button class="filter-chip" id="clear-filters" hidden></button>
     <div class="spacer"></div>
     <button class="btn" id="select-safe">Select all safe</button>
     <button class="btn" id="select-none">Clear selection</button>
