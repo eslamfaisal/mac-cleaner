@@ -136,17 +136,9 @@ lipo -archs "/Applications/Mac Cleaner.app/Contents/MacOS/Mac Cleaner"
 1. **Download** [`Mac.Cleaner.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg)
    from the latest release.
 2. **Open** the `.dmg` and **drag** *Mac Cleaner* into your `Applications` folder.
-3. **First launch** — because releases are ad-hoc signed (no paid Apple Developer
-   certificate), Gatekeeper warns the first time. **Right-click the app → Open → Open.**
-   You only do this once.
-
-   <details><summary>Prefer the terminal? Remove the quarantine flag instead</summary>
-
-   ```sh
-   xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"
-   ```
-   </details>
-
+3. **Double-click to launch.** Releases are signed with a Developer ID certificate and
+   notarized by Apple, so there is no Gatekeeper warning and no right-click workaround.
+   Nothing else needs to be installed — the app bundles its own Node runtime.
 4. (Optional but recommended) **Grant Full Disk Access** — see below. The app walks you
    through it on first run and detects the grant live.
 
@@ -368,13 +360,40 @@ universal: the official nodejs.org `darwin-arm64` and `darwin-x64` builds fused 
 fat binary with `lipo`), code-signs, and produces a DMG with an `/Applications` drop
 symlink. Fetched Node builds are cached in `.node-cache/`.
 
+Signing is done **inside-out**: the bundled `node` is signed first with
+[`app/entitlements-node.plist`](app/entitlements-node.plist), then the bundle. Those
+entitlements (`allow-jit`, `allow-unsigned-executable-memory`) are what let V8 compile
+JavaScript under the hardened runtime — without them a notarized build aborts on launch.
+
+With `SIGN_ID` **and** `NOTARY_PROFILE` set, the script also notarizes and staples the
+`.app` *before* it goes into the DMG, then signs, notarizes and staples the DMG itself.
+Both steps matter: stapling the app keeps it valid when dragged out of the DMG or launched
+offline, and an unsigned DMG is assessed as `no usable signature` even when a ticket is
+stapled to it.
+
+Set up the notary profile once:
+
+```sh
+xcrun notarytool store-credentials "mac-cleaner-notary" \
+  --key ~/.appstoreconnect/private_keys/AuthKey_XXXXXXXXXX.p8 \
+  --key-id XXXXXXXXXX --issuer <issuer-uuid>
+```
+
+The key comes from App Store Connect → *Users and Access* → *Integrations* → *App Store
+Connect API* (needs **Admin** access); the issuer UUID is on the same page.
+
 | Option / env var | Effect |
 |---|---|
 | `--arch universal\|arm64\|x64\|all` | Which architecture(s) to build. Default `universal`. |
 | `NODE_DIST_VERSION=v22.12.0` | Which official Node version to bundle. |
 | `NODE_BIN=/path/to/node` | *(single-arch builds only)* bundle this Node instead of fetching. |
-| `SIGN_ID="Developer ID Application: …"` | Proper signing instead of ad-hoc. |
-| `NOTARY_PROFILE=<profile>` | With `SIGN_ID`, also notarize + staple the DMGs. |
+| `SIGN_ID="Developer ID Application: …"` | Proper signing instead of ad-hoc. Adds a secure timestamp. |
+| `NOTARY_PROFILE=<profile>` | With `SIGN_ID`, also notarize + staple the `.app` **and** the DMG. |
+
+> Without `SIGN_ID` the build is **ad-hoc signed** — fine for local testing, but macOS 15+
+> blocks such apps on first launch and the old right-click → *Open* shortcut no longer
+> bypasses it (the user has to go to *System Settings → Privacy & Security → Open Anyway*).
+> Anything you hand to other people should be signed and notarized.
 
 > **Why it may download Node:** Homebrew's `node` links dylibs from the Cellar
 > (`@rpath/libnode…`) that don't exist on other machines. When the build detects a
@@ -387,8 +406,9 @@ symlink. Fetched Node builds are cached in `.node-cache/`.
 # 1. bump the version
 echo 1.1.1 > VERSION
 
-# 2. build all three DMGs (universal + Apple Silicon + Intel)
-./build-app.sh --arch all
+# 2. build all three DMGs (universal + Apple Silicon + Intel), signed + notarized
+SIGN_ID="Developer ID Application: … (TEAMID)" NOTARY_PROFILE=mac-cleaner-notary \
+  ./build-app.sh --arch all
 
 # 3. tag and publish
 git commit -am "Release v$(cat VERSION)"
@@ -463,11 +483,18 @@ the API is not meant to be called from anywhere but the bundled frontend.
 <details>
 <summary><b>macOS says the app "cannot be opened" or "is damaged"</b></summary>
 
-The build is ad-hoc signed, so Gatekeeper blocks the first launch. Right-click the app →
-**Open** → **Open** (once). Or clear the quarantine flag:
+Official releases are Developer ID signed and notarized, so this shouldn't happen. If it
+does, the download is probably incomplete or was modified in transit — check the signature:
+
 ```sh
-xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"
+spctl -a -vvv "/Applications/Mac Cleaner.app"
+# expected: accepted / source=Notarized Developer ID
 ```
+
+If that prints anything else, re-download from the
+[releases page](https://github.com/eslamfaisal/mac-cleaner/releases/latest). Builds you
+compile yourself with `./build-app.sh` are ad-hoc signed and *will* be blocked — that is
+expected for local builds; see [Build the app / DMG yourself](#build-the-app--dmg-yourself).
 </details>
 
 <details>

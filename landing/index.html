@@ -326,12 +326,18 @@
 <section id="faq" class="wrap">
   <h2 class="sec-h">FAQ</h2>
   <details open>
-    <summary>macOS says the app "cannot be opened" — why?</summary>
-    <p>Downloads are currently ad-hoc signed (no paid Apple Developer certificate), so Gatekeeper
-       shows a warning on first launch. Right-click the app → <b>Open</b> → <b>Open</b> once; after
-       that it opens normally. Or remove the quarantine flag yourself:</p>
-    <pre><code>xattr -d com.apple.quarantine "/Applications/Mac Cleaner.app"</code></pre>
-    <p>You can also skip the download entirely and run from source (below) — same code.</p>
+    <summary>Do I need to install Node.js first?</summary>
+    <p>No. The app ships with its own Node runtime inside the bundle, so there is nothing to
+       install and nothing to configure — download, drag to Applications, open.</p>
+  </details>
+  <details>
+    <summary>Will macOS warn me when I open it?</summary>
+    <p>No. Downloads are signed with an Apple Developer ID certificate and notarized by Apple,
+       so they open normally on first launch — no right-click workaround, no quarantine flag to
+       remove. You can verify it yourself:</p>
+    <pre><code>spctl -a -vvv "/Applications/Mac Cleaner.app"</code></pre>
+    <p>Expected: <code>accepted</code> / <code>source=Notarized Developer ID</code>.
+       You can also skip the download entirely and run from source (below) — same code.</p>
   </details>
   <details>
     <summary>Why does it ask for Full Disk Access?</summary>
