@@ -40,7 +40,8 @@
   "description": "Free, open-source disk cleanup dashboard for macOS. Finds duplicate files, biggest files, System Data, and developer caches (Xcode, Gradle, Flutter, npm, Docker). Runs 100% locally; nothing is deleted without explicit user confirmation.",
   "url": "https://eslamfaisal.github.io/mac-cleaner/",
   "downloadUrl": "https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner.dmg",
-  "softwareVersion": "1.4.1",
+  "softwareVersion": "1.4.2",
+  "softwareRequirements": "None — the app bundles its own Node.js runtime",
   "license": "https://opensource.org/licenses/MIT",
   "screenshot": "https://eslamfaisal.github.io/mac-cleaner/assets/overview.png",
   "author": { "@type": "Person", "name": "Eslam Faisal", "url": "https://github.com/eslamfaisal" }
@@ -55,6 +56,16 @@
       "@type": "Question",
       "name": "Does Mac Cleaner work on both Apple Silicon and Intel Macs?",
       "acceptedAnswer": { "@type": "Answer", "text": "Yes. Since v1.3.0 the main DMG is a universal binary that runs natively on Apple Silicon (M1/M2/M3/M4) and Intel Macs. Smaller single-architecture downloads are also available on the releases page." }
+    },
+    {
+      "@type": "Question",
+      "name": "Do I need to install Node.js to use Mac Cleaner?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. The app bundles its own Node.js runtime inside the application bundle, so there is nothing to install and nothing to configure. Download the DMG, drag the app to Applications, and open it." }
+    },
+    {
+      "@type": "Question",
+      "name": "Will macOS show a Gatekeeper warning when I open Mac Cleaner?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. Since v1.4.2 downloads are signed with an Apple Developer ID certificate and notarized by Apple, so the app opens normally on first launch. There is no right-click workaround and no quarantine flag to remove. You can verify with: spctl -a -vvv \"/Applications/Mac Cleaner.app\"" }
     },
     {
       "@type": "Question",
@@ -129,6 +140,9 @@
   .hero p { color: var(--ink-2); max-width: 620px; margin: 0 auto 30px; font-size: 17.5px; }
   .hero-ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; align-items: center; }
   .hero-sub { margin-top: 12px; font-size: 13px; color: var(--ink-3); }
+  .trust { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
+  .trust span { border: 1px solid color-mix(in srgb, var(--safe) 38%, transparent); color: var(--safe);
+                border-radius: 999px; padding: 5px 14px; font-size: 12.5px; }
   .hero-src { margin: 34px auto 0; max-width: 560px; text-align: left; }
   .hero-src .lbl { font-size: 12.5px; color: var(--ink-3); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .06em; }
 
@@ -220,6 +234,11 @@
     <a class="btn btn-lg" href="https://github.com/eslamfaisal/mac-cleaner">View source on GitHub</a>
   </div>
   <div class="hero-sub">Free &amp; open source · Universal — Apple Silicon &amp; Intel · macOS 12+ · no account, no telemetry</div>
+  <div class="trust">
+    <span>🔏 Signed &amp; notarized by Apple</span>
+    <span>📦 Node.js bundled — nothing to install</span>
+    <span>✅ Opens with no Gatekeeper warning</span>
+  </div>
 
   <div class="mock">
     <div class="mock-bar"><i></i><i></i><i></i><span>Mac Cleaner — 197 GB cleanable found</span></div>
@@ -380,6 +399,11 @@ npm start   # → http://127.0.0.1:4545</code></pre>
   <p class="hero-sub">Universal binary (Apple Silicon &amp; Intel). Smaller chip-specific downloads:
     <a href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner-AppleSilicon.dmg">Apple&nbsp;Silicon</a> ·
     <a href="https://github.com/eslamfaisal/mac-cleaner/releases/latest/download/Mac.Cleaner-Intel.dmg">Intel</a></p>
+  <div class="trust">
+    <span>🔏 Signed &amp; notarized by Apple</span>
+    <span>📦 Node.js bundled</span>
+    <span>🔒 100% local</span>
+  </div>
 </section>
 
 <footer>
