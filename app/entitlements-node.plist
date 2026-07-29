@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The bundled Node runtime is signed with the hardened runtime (required for
+       notarization). V8 compiles JavaScript to machine code at runtime, which the
+       hardened runtime blocks by default — without these two entitlements node
+       aborts on launch and the app shows "could not start". -->
+  <key>com.apple.security.cs.allow-jit</key>                       <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+</dict>
+</plist>

@@ -139,9 +139,27 @@ build_app() { # $1 = universal | arm64 | x64
   echo "    app  slices: $(lipo -archs "$app/Contents/MacOS/Mac Cleaner")"
 
   echo "==> codesign"
-  codesign --force --deep --options runtime -s "$SIGN_ID" "$app" 2>/dev/null \
-    || codesign --force --deep -s "$SIGN_ID" "$app"
-  codesign --verify --deep "$app" && echo "    signature ok"
+  # Sign inside-out: nested code first, bundle last. --deep is deprecated and
+  # cannot apply per-binary entitlements, which the bundled node needs.
+  local sign_flags=(--force --options runtime)
+  # Secure timestamps need a real identity (and the network); ad-hoc can't have one.
+  [ "$SIGN_ID" != "-" ] && sign_flags+=(--timestamp)
+  codesign "${sign_flags[@]}" --entitlements app/entitlements-node.plist \
+    -s "$SIGN_ID" "$app/Contents/Resources/node"
+  codesign "${sign_flags[@]}" -s "$SIGN_ID" "$app"
+  codesign --verify --strict --deep "$app" && echo "    signature ok"
+
+  # Notarize the .app and staple the ticket into the bundle *before* it goes in
+  # the DMG, so the app still validates when copied out of the DMG or launched
+  # offline. The DMG itself is notarized separately below.
+  if [ "$SIGN_ID" != "-" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
+    echo "==> notarizing app"
+    local zip="dist/.notarize-$arch.zip"
+    ditto -c -k --keepParent "$app" "$zip"
+    xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$app"
+    rm -f "$zip"
+  fi
 
   echo "==> DMG ($dmg)"
   local stage="dist/dmg-stage"
@@ -151,10 +169,19 @@ build_app() { # $1 = universal | arm64 | x64
   hdiutil create -volname "Mac Cleaner" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
   rm -rf "$stage"
 
+  # Sign the disk image itself. Stapling a ticket onto an unsigned DMG is not
+  # enough — Gatekeeper assesses the .dmg as "no usable signature" when the user
+  # opens it. Signing must happen before notarization.
+  if [ "$SIGN_ID" != "-" ]; then
+    codesign --force --timestamp -s "$SIGN_ID" "$dmg"
+    codesign --verify --strict "$dmg" && echo "    DMG signature ok"
+  fi
+
   if [ "$SIGN_ID" != "-" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
-    echo "==> notarizing"
+    echo "==> notarizing DMG"
     xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$dmg"
+    xcrun stapler validate "$dmg" && echo "    ticket stapled"
   fi
 
   du -sh "$app" "$dmg"
