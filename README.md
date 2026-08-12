@@ -29,6 +29,7 @@ Nothing is ever deleted automatically. You decide what goes.
 - [Why](#why)
 - [Highlights](#highlights)
 - [Two ways to run it](#two-ways-to-run-it)
+- [Normal mode vs Developer mode](#normal-mode-vs-developer-mode)
 - [Which download? Apple Silicon vs Intel](#which-download-apple-silicon-vs-intel)
 - [Install the app (DMG)](#install-the-app-dmg)
 - [Full Disk Access](#full-disk-access)
@@ -66,7 +67,9 @@ surfaces the **exact terminal command** instead of a fake delete button.
 
 - 🖥️ **App *and* dashboard, one codebase** — install the `.dmg` or run `npm start`. Same
   scanner, same UI, same security model.
-- 🏠 **For every Mac user, not just developers** — duplicate-file finder (checksum-verified,
+- 🏠 **Two modes, one scan** — pick **Normal** or **Developer** the first time you open it,
+  switch any time from the toolbar. See [Normal mode vs Developer mode](#normal-mode-vs-developer-mode).
+- 🧑‍🔧 **For every Mac user, not just developers** — duplicate-file finder (checksum-verified,
   always keeps the newest copy), a Biggest Files explorer sorted largest-first across your
   whole home folder including Movies/Music/Pictures, screenshots piling up on the Desktop,
   and Downloads you haven't touched in months.
@@ -97,6 +100,25 @@ surfaces the **exact terminal command** instead of a fake delete button.
 
 Both run the identical local server. The app is just a ~180-line Swift `WKWebView` shell —
 it exists so macOS attributes Full Disk Access to *"Mac Cleaner"* instead of your terminal.
+
+## Normal mode vs Developer mode
+
+The first launch asks who you are. **The scan is identical either way** — the mode only
+decides how the results are presented, so switching is instant and never rescans.
+
+| | Normal | Developer |
+|---|---|---|
+| **Categories** | 11 plain-language ones: System Junk, Trash, Large & Old Files, Duplicate Files, Downloads & Installers, Unused Apps & Leftovers, App Caches, Mail & Message Attachments, Photos/Music/Media, Backups & Updates — plus everything technical in a single *Developer & Pro Tools* card | All 26 technical ones, split by toolchain: Xcode, Android & JVM, Flutter, Node, Python, Docker, IDEs, project build artifacts, game engines … |
+| **Row labels** | What the item is ("Slack — cache", "Files you already deleted") | Exact name and path, bundle ids included |
+| **Deleting** | Moves to Trash by default | Deletes permanently by default |
+| **Terminal commands** | Hidden | Shown |
+
+Switch from the toolbar toggle, or from ⚙️ Settings, which also holds the per-mode delete
+default and the Full Disk Access status. Both choices are stored in
+`~/Library/Application Support/Mac Cleaner/settings.json`.
+
+Neither mode ever deletes on its own: you select items and confirm, and anything classified
+`risky` needs a separate acknowledgment first.
 
 ## Which download? Apple Silicon vs Intel
 
@@ -473,6 +495,7 @@ VERSION             Single source of truth for the app/release version
 | `/api/scan/cancel` | POST | Cancel the in-progress scan |
 | `/api/delete` | POST | Delete/trash item ids: `{ ids: string[], mode: 'trash' \| 'rm' }` |
 | `/api/reveal` | POST | Reveal an item in Finder |
+| `/api/settings` | POST | Save preferences: `{ uiMode?: 'normal' \| 'dev', deleteMode?: { normal?: 'trash' \| 'rm', dev?: … } }` |
 | `/api/settings/fda` | POST | Deep-link to the Full Disk Access settings pane |
 
 All `POST`s require the `x-token` header (the per-boot token embedded in the served page) —
