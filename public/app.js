@@ -250,11 +250,11 @@ function connect() {
     if (state.run && state.run.pending.size === 0) finishRun();
     markDirty();
   });
-  es.addEventListener('progress', (e) => { state.scan = JSON.parse(e.data); markDirty(); });
+  es.addEventListener('progress', (e) => { applyScanState(JSON.parse(e.data)); markDirty(); });
   es.addEventListener('scan', (e) => {
     const s = JSON.parse(e.data);
     if (state.scan.status === 'scanning' && s.status === 'done') state.scanEndedAt = Date.now();
-    state.scan = s;
+    applyScanState(s);
     markDirty();
   });
   es.addEventListener('walk', (e) => { $('#walk-dir').textContent = 'scanning ' + JSON.parse(e.data).dir; });
@@ -367,6 +367,19 @@ function buildCommands() {
 
 // ------------------------------------------------------------- filters ----
 
+// A new scan session means the previous session's items no longer exist. Their
+// ids are never reused, so keeping them doubled every total, left dead rows
+// selectable, and made "Clean" report that nothing was removed.
+function applyScanState(s) {
+  if (s.session !== undefined && state.scan.session !== undefined && s.session !== state.scan.session) {
+    state.items = new Map();
+    state.selection.clear();
+    state.receipt = null;
+    state.run = null;
+  }
+  state.scan = s;
+}
+
 function selectable(i) {
   return !i.displayOnly && !isKept(i)
     && !['deleted', 'gone', 'missing', 'deleting', 'queued'].includes(i.status);
@@ -394,21 +407,35 @@ function reclaimable(i) {
 // prefix of "~/Library/Mail Downloads" without being its parent, and several
 // rows can legitimately share one display (an emulator lists its snapshots,
 // its user data and the whole device).
+//
+// Single sorted sweep instead of a per-item scan over all roots: the naive
+// version measured 90–96 ms per call with "Select all safe" ticked (1,100+
+// items) and ran at 4 Hz — a frozen UI on the mode's flagship button. Sorting
+// with '/' forced below every other byte makes each directory's descendants
+// contiguous, so one ancestor stack replaces the O(n²) prefix scans (~0.5 ms).
 function selectionTotals(items) {
-  const ordered = [...items].sort((a, b) => (a.abs || '').length - (b.abs || '').length);
-  const roots = [];
   const seen = new Set();
-  const by = { safe: 0, caution: 0, risky: 0 };
-  let bytes = 0;
-  for (const i of ordered) {
+  const list = [];
+  for (const i of items) {
     const abs = i.abs || i.display;
     const key = abs + '|' + i.kind;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (roots.some(r => abs.startsWith(r))) continue;   // freed by an ancestor
-    if (i.kind !== 'files') roots.push(abs + '/');
+    list.push({ abs, sortKey: abs.replaceAll('/', '\u0000'), i });
+  }
+  // directories before file-lists at the same path, so the dir claims the root
+  list.sort((a, b) => a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1
+    : (a.i.kind === 'files' ? 1 : 0) - (b.i.kind === 'files' ? 1 : 0));
+  const by = { safe: 0, caution: 0, risky: 0 };
+  let bytes = 0;
+  const roots = [];
+  for (const { abs, i } of list) {
+    const probe = abs + '/';
+    while (roots.length && !probe.startsWith(roots[roots.length - 1])) roots.pop();
+    if (roots.length) continue;                     // freed by a selected ancestor
     bytes += i.bytes;
     by[i.safety] += i.bytes;
+    if (i.kind !== 'files') roots.push(probe);      // file-lists don't free their parent dir
   }
   return { bytes, by };
 }
@@ -418,6 +445,8 @@ const selectionBytes = (items) => selectionTotals(items).bytes;
 function passesFilters(i) {
   if (['missing'].includes(i.status)) return false;
   if (isKept(i)) return false;
+  // "show me only what failed" — everything else is irrelevant in that mode
+  if (state.filters.errorsOnly) return i.status === 'error';
   if (state.filters.safety && i.safety !== state.filters.safety) return false;
   if (i.bytes < state.filters.minBytes && i.status !== 'scanning' && i.status !== 'denied') return false;
   if (state.filters.q) {
@@ -443,11 +472,13 @@ function activeFilterLabels() {
   if (state.filters.safety) out.push(state.filters.safety);
   if (state.filters.minBytes > 0) out.push('≥ ' + fmtBytes(state.filters.minBytes));
   if (state.filters.q) out.push(`“${state.filters.q}”`);
+  if (state.filters.errorsOnly) out.push('failed items only');
   return out;
 }
 
 function clearFilters() {
   state.filters.safety = null;
+  state.filters.errorsOnly = false;
   state.filters.minBytes = 0;
   state.filters.q = '';
   $('#search').value = '';
@@ -571,28 +602,54 @@ function renderHeader() {
 }
 
 function renderFda() {
-  let deniedCount = 0;
-  for (const i of state.items.values()) if (i.status === 'denied' || i.denied > 0) deniedCount++;
+  // only rows that Full Disk Access could actually unlock — root-owned denials
+  // are not the user's to fix and must not drive this UI
+  let blocked = 0;
+  let blockedBytesUnknown = 0;
+  for (const i of state.items.values()) {
+    if (i.needs === 'fda' && (state.fda === false || i.status === 'denied')) {
+      blocked++;
+      if (!i.bytes) blockedBytesUnknown++;
+    }
+  }
   const missing = state.fda === false;
   const justGranted = state.fdaJustGranted && Date.now() - state.fdaJustGranted < 4500;
   const showCard = (missing || justGranted) && !state.fdaDismissed;
   $('#fda-card').hidden = !showCard;
-  $('#fda-lock').hidden = !(missing || deniedCount >= 3);
+  // Only claim access is missing when it actually is. Root-owned paths deny
+  // reads no matter what the user grants, so counting them made the lock (and
+  // its "grant access" promise) appear on a Mac where FDA was already on.
+  $('#fda-lock').hidden = !missing;
   if (!showCard) return;
 
   $('#fda-target').textContent = state.appMode ? 'Mac Cleaner' : 'your terminal app (Terminal, iTerm, …)';
   const pill = $('#fda-pill');
   const hint = $('#fda-hint');
+  const relaunch = $('#fda-relaunch');
+  const canRelaunch = state.appMode && !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.relaunch);
   if (missing) {
     pill.className = 'fda-pill waiting';
     pill.innerHTML = '<span class="spinner"></span> waiting for permission…';
+    // say what is actually locked, in items, rather than a vague warning
+    if (blocked) {
+      $('#fda-why').textContent = `${fmtCount(blocked)} place${blocked === 1 ? '' : 's'} on your disk `
+        + `(Mail, Messages, your Photos library, iPhone backups…) cannot be measured yet — `
+        + `${blockedBytesUnknown ? 'they currently show as 0 B' : 'their sizes are incomplete'}. `
+        + 'macOS never asks for this permission on its own; you turn it on, it applies when the app restarts.';
+    }
+    relaunch.hidden = true;
     hint.textContent = state.appMode
-      ? 'If it stays orange after enabling, quit and reopen Mac Cleaner, then rescan.'
-      : 'If it stays orange after enabling, restart ./run.sh in your terminal, then rescan.';
+      ? 'macOS only applies the permission when the app starts again.'
+      : 'Then restart ./run.sh in your terminal and rescan.';
   } else {
     pill.className = 'fda-pill granted';
     pill.textContent = '✓ Full Disk Access granted';
-    hint.textContent = 'Rescan to pick up newly accessible locations.';
+    // the grant is only live for a process started AFTER it was given
+    relaunch.hidden = !canRelaunch;
+    hint.textContent = canRelaunch
+      ? 'One restart and the locked places become visible.'
+      : state.appMode ? 'Quit and reopen Mac Cleaner, then rescan.'
+        : 'Restart ./run.sh in your terminal, then rescan.';
   }
 }
 
@@ -808,7 +865,7 @@ function clusterRuleFor(gid, items) {
     // group on the content hash, never on the header label: the label rounds
     // sizes, so two unrelated sets of same-named files can print identically
     return { key: (i) => i.dupSet || byProject(i), label: byProject,
-      icon: () => '👯', noun: ['copy', 'copies'], skipNewest: true,
+      icon: () => '👯', noun: ['copy', 'copies'], skipNewest: true, thumb: true,
       aria: 'Select all copies except the newest', title: 'Selects every copy except the newest' };
   }
   // A normal-mode category can merge several technical ones — "System Junk"
@@ -830,6 +887,21 @@ function clusterRuleFor(gid, items) {
 // duplicates: the cluster checkbox intentionally skips the newest copy, so
 // "tick the set" reclaims space while always keeping one file
 const clusterSelectable = (i, rule) => selectable(i) && !(rule?.skipNewest && i.dupNewest);
+
+// Floating larger preview for a duplicate set — click the thumbnail to open,
+// click anywhere (or Escape) to close.
+function showThumbPreview(item, anchor) {
+  const box = $('#thumb-preview');
+  box.querySelector('img').src = `/api/thumb?id=${encodeURIComponent(item.id)}&t=${TOKEN}&s=512`;
+  box.querySelector('.tp-name').textContent = displayName(item);
+  box.querySelector('.tp-path').textContent = item.display;
+  box.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  box.style.top = Math.min(window.innerHeight - 380, r.bottom + 8) + 'px';
+  box.style.left = Math.min(window.innerWidth - 360, Math.max(8, r.left)) + 'px';
+  const close = () => { box.hidden = true; document.removeEventListener('click', close, true); };
+  setTimeout(() => document.addEventListener('click', close, true), 0);
+}
 
 // Every item of the cluster, filters ignored on purpose: a checkbox must act
 // on what it says it acts on. Filters hide rows; they never silently shrink a
@@ -853,6 +925,22 @@ function buildProjectHeader(phId, proj, gid, rule) {
   // the key can be a content hash — show the human label when the rule has one
   const first = [...state.items.values()].find(i => groupOf(i) === gid && rule.key(i) === proj);
   el.querySelector('.ph-name').textContent = (rule.label && first) ? rule.label(first) : proj;
+  // A duplicate set of photos or videos is decided with the eyes, not the
+  // name: a Quick Look thumbnail in the header, click for a bigger look.
+  if (rule.thumb && first) {
+    const img = document.createElement('img');
+    img.className = 'ph-thumb';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.src = `/api/thumb?id=${encodeURIComponent(first.id)}&t=${TOKEN}`;
+    img.addEventListener('error', () => img.remove()); // no preview → icon only
+    img.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showThumbPreview(first, img);
+    });
+    img.title = 'Click for a bigger preview';
+    el.insertBefore(img, el.querySelector('.ph-name'));
+  }
   const check = el.querySelector('input');
   check.setAttribute('aria-label', rule.aria);
   check.title = rule.title;
@@ -869,8 +957,17 @@ function buildProjectHeader(phId, proj, gid, rule) {
 function updateProjectHeader(ph, c) {
   const [one, many] = c.rule.noun;
   ph.querySelector('.ph-size').textContent = fmtBytes(c.total);
-  ph.querySelector('.ph-count').textContent =
-    `${fmtCount(c.items.length)} ${c.items.length === 1 ? one : many}`;
+  // duplicates: the number that matters is what deleting the extras frees —
+  // the total says how much the set occupies, not what the user gains
+  if (c.rule.skipNewest) {
+    const keeper = c.items.reduce((m, i) => (i.dupNewest ? i : m), null);
+    const waste = Math.max(0, c.total - (keeper ? keeper.bytes : (c.items[0]?.bytes || 0)));
+    ph.querySelector('.ph-count').textContent =
+      `${fmtCount(c.items.length)} ${c.items.length === 1 ? one : many} · frees ${fmtBytes(waste)} keeping one`;
+  } else {
+    ph.querySelector('.ph-count').textContent =
+      `${fmtCount(c.items.length)} ${c.items.length === 1 ? one : many}`;
+  }
   // state is computed over everything the checkbox would touch, not just the
   // rows currently visible — otherwise it renders indeterminate forever
   const selectableItems = clusterItems(c.gid, c.proj, c.rule).filter(i => clusterSelectable(i, c.rule));
@@ -890,16 +987,19 @@ function buildRow(item) {
     <div class="r-main">
       <div class="r-name"><span class="nm"></span></div>
       <div class="r-path"></div>
+      <div class="r-loc" title="Show this file in its folder in Finder"></div>
       <div class="r-note" hidden></div>
     </div>
     <div class="r-status"></div>
     <div class="r-size"></div>
     <div class="r-actions">
       <button class="icon-btn act-keep" title="Keep this — hide it from future scans">📌</button>
-      <button class="icon-btn act-reveal" title="Reveal in Finder">🔍</button>
+      <button class="icon-btn act-reveal" title="Show in Finder — opens the folder with this item selected">📂</button>
       <button class="icon-btn act-delete" title="Delete this item">🗑️</button>
     </div>`;
   row.querySelector('.act-keep').addEventListener('click', () => keepItem(item.id));
+  // the path itself is a way to the file, not just a label
+  row.querySelector('.r-loc').addEventListener('click', () => post('/api/reveal', { id: item.id }).catch(e => toast(e.message, true)));
   row.querySelector('input').addEventListener('change', (e) => {
     e.target.checked ? state.selection.add(item.id) : state.selection.delete(item.id);
     markDirty();
@@ -924,7 +1024,8 @@ function updateRow(row, item, indent) {
 
   const nameEl = row.querySelector('.r-name');
   const label = displayName(item);
-  const badgeSig = [item.safety, item.needs || '', state.uiMode, ...(item.badges || [])].join('|');
+  // state.fda and status feed the badges now, so they must invalidate the cache
+  const badgeSig = [item.safety, item.needs || '', state.uiMode, state.fda, item.status, ...(item.badges || [])].join('|');
   if (row.dataset.badgeSig !== badgeSig || nameEl.querySelector('.nm').textContent !== label) {
     row.dataset.badgeSig = badgeSig;
     nameEl.innerHTML = '<span class="nm"></span>';
@@ -933,10 +1034,12 @@ function updateRow(row, item, indent) {
     sb.className = 'badge badge-safety-' + item.safety;
     sb.textContent = item.safety;
     nameEl.appendChild(sb);
-    if (item.needs) {
+    // "needs Full Disk Access" is only true while it is missing — once granted
+    // the row is measured, and the badge became 58 lies in a row
+    if (item.needs === 'root' || (item.needs === 'fda' && (state.fda === false || item.status === 'denied'))) {
       const nb = document.createElement('span');
       nb.className = 'badge badge-needs';
-      nb.textContent = item.needs === 'fda' ? 'needs Full Disk Access' : 'root-managed';
+      nb.textContent = item.needs === 'fda' ? 'needs Full Disk Access' : 'managed by macOS';
       nameEl.appendChild(nb);
     }
     for (const b of item.badges || []) {
@@ -963,12 +1066,23 @@ function updateRow(row, item, indent) {
       : (item.regen || '');
   if (note.textContent !== noteText) note.textContent = noteText;
   note.hidden = !noteText;
-  // Normal mode answers "what is this?" on the second line; the path is a
-  // developer's question and stays in the tooltip and the Reveal button.
+  // Normal mode answers "what is this?" on the second line — and the path is
+  // ALWAYS shown on its own line underneath, clickable to open the file's
+  // folder in Finder. Hiding the location bred distrust: users want to see
+  // exactly which folder and file a row is talking about before touching it.
   const age = item.mtime ? '  ·  ' + fmtAge(item.mtime) : '';
-  row.querySelector('.r-path').textContent = state.uiMode === 'normal'
-    ? (item.why || item.display) + age
-    : item.display + age;
+  const loc = row.querySelector('.r-loc');
+  if (state.uiMode === 'normal') {
+    row.querySelector('.r-path').textContent = (item.why || '') + age;
+    loc.hidden = false;
+    // LRM marks pin the leading "~/" in place: the element renders RTL so a
+    // long path truncates at the START and keeps the file name visible
+    const shown = '‎' + item.display + '‎';
+    if (loc.textContent !== shown) loc.textContent = shown;
+  } else {
+    row.querySelector('.r-path').textContent = item.display + age;
+    loc.hidden = true;
+  }
 
   const statusEl = row.querySelector('.r-status');
   if (item.status === 'scanning') statusEl.innerHTML = '<span class="spinner"></span>';
@@ -1061,6 +1175,7 @@ function renderCards() {
     if (i.displayOnly) s.ro++;
     if (i.status === 'denied') s.denied++;
     if (i.status === 'scanning') s.scanning++;
+    if (i.status === 'error') s.failed = (s.failed || 0) + 1;
     if (i.group === 'duplicates') (s.sets ??= new Set()).add(i.dupSet || i.project || '');
     // the same test the rows use, so a search that matches 109 rows cannot
     // leave every card dimmed as though nothing matched
@@ -1077,7 +1192,9 @@ function renderCards() {
     c.el.disabled = empty;
     if (empty) {
       c.size.textContent = '—';
-      c.meta.textContent = 'nothing found';
+      // duplicates and unused apps register in a late phase — declaring
+      // "nothing found" while the scan is still running is simply untrue
+      c.meta.textContent = state.scan.status === 'scanning' ? 'still looking…' : 'nothing found';
       for (const k of ['safe', 'caution', 'risky']) c.bar[k].style.width = '0%';
     } else {
       c.size.textContent = fmtBytes(s.b);
@@ -1086,6 +1203,7 @@ function renderCards() {
       if (s.scanning) bits.push('scanning…');
       if (s.ro) bits.push(`${fmtCount(s.ro)} read-only`);
       if (s.denied) bits.push(`🔒 ${fmtCount(s.denied)}`);
+      if (s.failed) bits.push(`⚠ ${fmtCount(s.failed)} failed`);
       c.meta.textContent = bits.join(' · ');
       const tot = s.b || 1;
       for (const k of ['safe', 'caution', 'risky']) c.bar[k].style.width = (s[k] / tot * 100) + '%';
@@ -1155,10 +1273,13 @@ function openModal(ids) {
   const total = selectionBytes(items);
   // A duplicate set the user is about to wipe entirely: every copy selected,
   // none kept. Worth saying out loud, in the one dialog that can still stop it.
+  // dupNewest is always serialized (as a boolean), so testing it for undefined
+  // matched every row with a project — including build artifacts, which then
+  // triggered a "duplicate set" warning about files that are not duplicates.
   const dupSets = new Map();
-  for (const i of items) if (i.dupNewest !== undefined && i.project) dupSets.set(i.project, (dupSets.get(i.project) || 0) + 1);
-  const wipedSets = [...dupSets].filter(([proj, n]) =>
-    n === [...state.items.values()].filter(x => x.project === proj && selectable(x)).length);
+  for (const i of items) if (i.dupSet) dupSets.set(i.dupSet, (dupSets.get(i.dupSet) || 0) + 1);
+  const wipedSets = [...dupSets].filter(([set, n]) =>
+    n === [...state.items.values()].filter(x => x.dupSet === set && selectable(x)).length);
 
   const permanentOnly = items.filter(i => i.permanentOnly);
   let modeText = deleteMode() === 'trash'
@@ -1174,9 +1295,11 @@ function openModal(ids) {
     for (const i of list.slice(0, 40)) {
       const r = document.createElement('div');
       r.className = 'm-row';
-      r.innerHTML = `<span class="dot dot-${i.safety}"></span><span class="m-name"></span><span class="m-badges"></span><span class="m-size"></span>`;
-      r.querySelector('.m-name').textContent = state.uiMode === 'normal'
-        ? displayName(i) : i.name + '  ·  ' + i.display;
+      r.innerHTML = `<span class="dot dot-${i.safety}"></span><span class="m-main"><span class="m-name"></span><span class="m-path"></span></span><span class="m-badges"></span><span class="m-size"></span>`;
+      // name AND full path in both modes — the last look before deletion is
+      // exactly where the user must see which file it really is
+      r.querySelector('.m-name').textContent = state.uiMode === 'normal' ? displayName(i) : i.name;
+      r.querySelector('.m-path').textContent = i.display;
       // badges carry the "newest — suggest keep" marker: hiding it here is how
       // a user deletes the copy they meant to keep without ever seeing a warning
       for (const b of i.badges || []) {
@@ -1282,6 +1405,10 @@ $('#scan-btn').addEventListener('click', () => {
 });
 $('#hero-scan').addEventListener('click', () => post('/api/scan/start').catch(e => toast(e.message, true)));
 $('#fda-open').addEventListener('click', () => post('/api/settings/fda').catch(e => toast(e.message, true)));
+$('#fda-relaunch').addEventListener('click', () => {
+  try { window.webkit.messageHandlers.relaunch.postMessage(1); }
+  catch { toast('Quit Mac Cleaner and open it again to finish granting access.', true); }
+});
 $('#fda-dismiss').addEventListener('click', () => {
   state.fdaDismissed = true;
   sessionStorage.setItem('cleaner-fda-dismissed', '1');
@@ -1298,10 +1425,15 @@ $('#clear-filters').addEventListener('click', clearFilters);
 $('#kept-chip').addEventListener('click', unkeepAll);
 $('#receipt-dismiss').addEventListener('click', () => { state.receipt = null; markDirty(); });
 $('#receipt-errors').addEventListener('click', () => {
+  // land the user ON the failures, not on an unfiltered list they must hunt
   state.filters.q = '';
   $('#search').value = '';
   state.filters.minBytes = 0;
   $('#min-size').value = '0';
+  state.filters.safety = null;
+  state.filters.errorsOnly = true;
+  const first = [...state.items.values()].find(i => i.status === 'error');
+  if (first) location.hash = '#g/' + encodeURIComponent(groupOf(first));
   markDirty();
 });
 $('#search').addEventListener('input', (e) => { state.filters.q = e.target.value.trim(); markDirty(); });

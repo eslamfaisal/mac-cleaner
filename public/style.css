@@ -426,6 +426,26 @@ body.mode-normal .card-advanced .card-size { font-size: 20px; }
   white-space: normal; margin-top: 3px; max-width: 70ch;
 }
 
+/* The item's real location: always visible, monospace so the folder structure
+   reads at a glance, and clickable — one click opens the folder in Finder with
+   the file selected. */
+.r-loc {
+  font-size: 11.5px; color: var(--ink-3);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;   /* long paths keep their TAIL visible — the file name matters most */
+  cursor: pointer; margin-top: 2px; max-width: 100%;
+}
+.r-loc:hover { color: var(--accent); text-decoration: underline; }
+
+.modal-list .m-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.modal-list .m-path {
+  font-size: 11px; color: var(--ink-3);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
+}
+
 .modal-list .m-badges { display: flex; gap: 4px; flex: 0 0 auto; }
 .dup-warn {
   margin-top: 10px; font-size: 12.5px; color: var(--caution);
@@ -443,3 +463,26 @@ body.mode-normal .card-advanced .card-size { font-size: 20px; }
 .receipt-icon { font-size: 18px; }
 .receipt-actions { display: flex; gap: 8px; margin-top: 10px; }
 .receipt-actions:empty { display: none; }
+
+/* ---------- duplicate previews ---------- */
+.ph-thumb {
+  width: 36px; height: 36px; object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--border); cursor: zoom-in; flex: 0 0 auto;
+  background: var(--surface-2);
+}
+.thumb-preview {
+  position: fixed; z-index: 70; width: 340px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.55);
+}
+.thumb-preview img {
+  width: 100%; max-height: 280px; object-fit: contain; border-radius: 8px;
+  background: var(--surface-2);
+}
+.thumb-preview .tp-name { font-weight: 650; font-size: 13px; margin-top: 8px; }
+.thumb-preview .tp-path {
+  font-size: 11px; color: var(--ink-3);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
+}

@@ -68,17 +68,21 @@
   <div class="onboard-head">
     <span class="onboard-icon">🔐</span>
     <div class="onboard-title">
-      <b>Unlock full scanning with Full Disk Access</b>
-      <div class="muted">Safari cache, Mail, device backups and parts of System Data are invisible without it.
-      macOS cannot prompt for this permission — it takes three quick steps:</div>
+      <b>Let Mac Cleaner see the rest of your disk</b>
+      <div class="muted" id="fda-why">Without this, Mail, Messages, your Photos library, iPhone backups and Safari
+      are invisible — they scan as 0 B. macOS never asks for this permission on its own; you turn it on,
+      it applies when the app restarts.</div>
     </div>
     <button class="icon-btn" id="fda-dismiss" title="Dismiss">✕</button>
   </div>
   <ol class="onboard-steps">
     <li><button class="btn" id="fda-open">Open Full Disk Access settings</button></li>
-    <li>Turn on <b id="fda-target">your terminal app</b> in the list (add it with “+” if missing)</li>
-    <li>Watch this flip: <span class="fda-pill waiting" id="fda-pill"><span class="spinner"></span> waiting for permission…</span>
-        <span class="muted" id="fda-hint">If it stays orange after enabling, quit &amp; relaunch, then rescan.</span></li>
+    <li>Switch on <b id="fda-target">your terminal app</b> in the list (add it with “+” if it is missing)</li>
+    <li>Come back here: <span class="fda-pill waiting" id="fda-pill"><span class="spinner"></span> waiting for permission…</span></li>
+    <li id="fda-step-relaunch">
+      <button class="btn btn-primary" id="fda-relaunch" hidden>Quit &amp; Reopen Mac Cleaner</button>
+      <span class="muted" id="fda-hint">macOS only applies the permission when the app starts again.</span>
+    </li>
   </ol>
 </div>
 
@@ -240,6 +244,12 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
+
+<div class="thumb-preview" id="thumb-preview" hidden>
+  <img alt="Preview">
+  <div class="tp-name"></div>
+  <div class="tp-path"></div>
+</div>
 
 <script src="/app.js"></script>
 </body>

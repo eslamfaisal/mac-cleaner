@@ -11,6 +11,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -180,13 +181,22 @@ const FDA_PROBES = [
   path.join(HOME, 'Library/Application Support/MobileSync/Backup'),
 ];
 
+// The one probe that exists on every account and is readable only with Full
+// Disk Access. Without it, a fresh Mac (no Safari data, no Mail, no backups)
+// answered "every probe is ENOENT, assume granted" — precisely the machine
+// belonging to the non-technical user this mode is for.
+const TCC_PROBE = path.join(HOME, 'Library/Application Support/com.apple.TCC/TCC.db');
+
 function fdaGranted() {
   let sawDenied = false;
   for (const p of FDA_PROBES) {
     try { fs.readdirSync(p); return true; }
     catch (e) { if (e.code !== 'ENOENT') sawDenied = true; }
   }
-  return !sawDenied; // every probe absent = can't tell, assume fine
+  if (sawDenied) return false;
+  try { fs.closeSync(fs.openSync(TCC_PROBE, 'r')); return true; }
+  catch (e) { if (e.code !== 'ENOENT') return false; }
+  return true; // nothing readable and nothing denied — cannot tell, assume fine
 }
 
 // Live re-probe: the settings pane grant takes effect for this running
@@ -250,7 +260,12 @@ const VOLUME_TRASH_RE = /^\/Volumes\/[^/]+\/\.Trashes\/\d+(\/|$)/;
 // A file inside a Photos/Music/Final Cut library is not a document — removing
 // one corrupts the whole library. The scanner never offers these, and this is
 // the backstop that keeps that true regardless of what the scanner emits.
+// The one exception is a legacy iPod sync cache that Apple's own advice says
+// to delete: it holds no library data, and the scanner offers it deliberately.
+const PACKAGE_INTERIOR_ALLOW = /\.(photoslibrary|migratedphotolibrary)\/iPod Photo Cache$/;
+
 function insideMediaLibrary(norm) {
+  if (PACKAGE_INTERIOR_ALLOW.test(norm)) return false;
   const segs = norm.split('/');
   for (let i = 0; i < segs.length - 1; i++) {
     const s = segs[i].toLowerCase();
@@ -533,6 +548,49 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// ---------------------------------------------------- thumbnails ----------
+// Small previews for duplicate sets (and other file rows): rendered by the
+// system's own Quick Look generator, so whatever Finder can preview, we can.
+// Only paths the scanner itself registered are ever passed to qlmanage, the
+// request is token-gated, and results are cached per (path, mtime, size).
+const THUMB_DIR = path.join(os.tmpdir(), `mac-cleaner-thumbs-${BOOT_ID}`);
+const THUMB_GROUPS = new Set(['duplicates', 'large', 'installers', 'binaries', 'personal']);
+const thumbInFlight = new Map(); // cacheKey -> Promise<string|null>
+
+function thumbTarget(item) {
+  // kind 'files' rows preview their first file; directories have no preview
+  const p = item.kind === 'files' ? item.paths?.[0] : item.kind === 'file' ? item.path : null;
+  return p || null;
+}
+
+async function makeThumb(target, px) {
+  let st;
+  try { st = await fsp.stat(target); } catch { return null; }
+  const key = crypto.createHash('sha1').update(`${target}|${st.mtimeMs}|${st.size}|${px}`).digest('hex');
+  const cached = path.join(THUMB_DIR, key + '.png');
+  try { await fsp.access(cached); return cached; } catch {}
+  if (thumbInFlight.has(key)) return thumbInFlight.get(key);
+  const p = (async () => {
+    // qlmanage writes "<basename>.png" into the output dir — render into a
+    // private subdir so concurrent requests and odd filenames cannot collide
+    const work = path.join(THUMB_DIR, 'w-' + key);
+    await fsp.mkdir(work, { recursive: true });
+    const ok = await new Promise((resolve) => {
+      execFile('/usr/bin/qlmanage', ['-t', '-s', String(px), '-o', work, target],
+        { timeout: 10000 }, (err) => resolve(!err));
+    });
+    let out = null;
+    if (ok) {
+      const made = (await fsp.readdir(work)).find(n => n.endsWith('.png'));
+      if (made) { await fsp.rename(path.join(work, made), cached); out = cached; }
+    }
+    await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
+    return out;
+  })().finally(() => thumbInFlight.delete(key));
+  thumbInFlight.set(key, p);
+  return p;
+}
+
 const server = http.createServer(async (req, res) => {
   if (!hostOk(req) || !originOk(req)) { json(res, 403, { error: 'forbidden' }); return; }
   const url = new URL(req.url, `http://127.0.0.1:${boundPort}`);
@@ -565,6 +623,23 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/state') {
     json(res, 200, snapshot());
+    return;
+  }
+
+  // ---- thumbnails (token in query — <img> tags cannot send headers) ----
+  if (req.method === 'GET' && url.pathname === '/api/thumb') {
+    if (url.searchParams.get('t') !== TOKEN) { json(res, 403, { error: 'bad token' }); return; }
+    const item = scanner.items.get(String(url.searchParams.get('id') || ''));
+    const target = item && THUMB_GROUPS.has(item.group) ? thumbTarget(item) : null;
+    if (!target) { json(res, 404, { error: 'no preview' }); return; }
+    const px = url.searchParams.get('s') === '512' ? 512 : 160;
+    try {
+      const file = await makeThumb(target, px);
+      if (!file) { json(res, 404, { error: 'no preview' }); return; }
+      const body = await fsp.readFile(file);
+      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'private, max-age=3600' });
+      res.end(body);
+    } catch { json(res, 404, { error: 'no preview' }); }
     return;
   }
 
