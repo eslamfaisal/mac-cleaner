@@ -237,8 +237,12 @@ function connect() {
       // a run is finished once nothing is queued or mid-delete any more
       if (state.run && ['deleted', 'gone', 'error', 'missing'].includes(item.status) && state.run.ids.has(item.id)) {
         state.run.pending.delete(item.id);
-        if (item.status === 'deleted') state.run.done++;
-        else if (item.status === 'error') state.run.failed++;
+        if (item.status === 'deleted') {
+          state.run.done++;
+          // per-run bytes: the server's counters are session-wide, so a second
+          // clean would otherwise report the first one's total again
+          state.run.bytes += item.bytes || 0;
+        } else if (item.status === 'error') state.run.failed++;
       }
     }
     // one message per batch: a failed bulk clean used to fire a toast per row
@@ -385,18 +389,31 @@ function reclaimable(i) {
 
 // Bytes a selection would actually free: a child inside an already-selected
 // folder is not counted twice.
-function selectionBytes(items) {
-  // shortest path first, so a parent is always seen before its children
-  const ordered = [...items].sort((a, b) => a.display.length - b.display.length);
+// Bytes a selection would actually free, split by safety.
+// Keyed on the real path, not the display string: "~/Library/Mail" is a string
+// prefix of "~/Library/Mail Downloads" without being its parent, and several
+// rows can legitimately share one display (an emulator lists its snapshots,
+// its user data and the whole device).
+function selectionTotals(items) {
+  const ordered = [...items].sort((a, b) => (a.abs || '').length - (b.abs || '').length);
   const roots = [];
+  const seen = new Set();
+  const by = { safe: 0, caution: 0, risky: 0 };
   let bytes = 0;
   for (const i of ordered) {
-    if (roots.some(r => i.display.startsWith(r))) continue;
-    roots.push(i.display + '/');
+    const abs = i.abs || i.display;
+    const key = abs + '|' + i.kind;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (roots.some(r => abs.startsWith(r))) continue;   // freed by an ancestor
+    if (i.kind !== 'files') roots.push(abs + '/');
     bytes += i.bytes;
+    by[i.safety] += i.bytes;
   }
-  return bytes;
+  return { bytes, by };
 }
+
+const selectionBytes = (items) => selectionTotals(items).bytes;
 
 function passesFilters(i) {
   if (['missing'].includes(i.status)) return false;
@@ -788,7 +805,10 @@ function clusterRuleFor(gid, items) {
       aria: 'Select all artifacts of this project', title: 'Select group' };
   }
   if (gid === 'duplicates' || gid === 'n-dups') {
-    return { key: byProject, icon: () => '👯', noun: ['copy', 'copies'], skipNewest: true,
+    // group on the content hash, never on the header label: the label rounds
+    // sizes, so two unrelated sets of same-named files can print identically
+    return { key: (i) => i.dupSet || byProject(i), label: byProject,
+      icon: () => '👯', noun: ['copy', 'copies'], skipNewest: true,
       aria: 'Select all copies except the newest', title: 'Selects every copy except the newest' };
   }
   // A normal-mode category can merge several technical ones — "System Junk"
@@ -830,7 +850,9 @@ function buildProjectHeader(phId, proj, gid, rule) {
     <span class="ph-count"></span>
     <span class="ph-size"></span>`;
   el.querySelector('.ph-icon').textContent = rule.icon(proj);
-  el.querySelector('.ph-name').textContent = proj;
+  // the key can be a content hash — show the human label when the rule has one
+  const first = [...state.items.values()].find(i => groupOf(i) === gid && rule.key(i) === proj);
+  el.querySelector('.ph-name').textContent = (rule.label && first) ? rule.label(first) : proj;
   const check = el.querySelector('input');
   check.setAttribute('aria-label', rule.aria);
   check.title = rule.title;
@@ -968,10 +990,9 @@ function renderSelectionBar() {
   bar.hidden = ids.length === 0;
   if (ids.length) {
     const items = ids.map(id => state.items.get(id));
-    // a folder and something inside it can both be ticked — count the bytes once
-    const bytes = selectionBytes(items);
-    const by = { safe: 0, caution: 0, risky: 0 };
-    for (const i of items) by[i.safety] += i.bytes;
+    // one pass for both figures — chips summed separately used to exceed the
+    // total sitting next to them
+    const { bytes, by } = selectionTotals(items);
     $('#sel-count').textContent = fmtCount(ids.length);
     $('#sel-size').textContent = fmtBytes(bytes);
     $('#sel-breakdown').innerHTML = ['safe', 'caution', 'risky']
@@ -1029,20 +1050,21 @@ function buildCards() {
 function renderCards() {
   const stats = new Map();
   for (const i of state.items.values()) {
-    if (['deleted', 'gone', 'missing'].includes(i.status)) continue;
+    // same rules as everywhere else: a kept row must vanish from the card too,
+    // or the card and the detail header it opens report different numbers
+    if (['deleted', 'gone', 'missing'].includes(i.status) || isKept(i)) continue;
     const gid = groupOf(i);
     const s = stats.get(gid)
       || { n: 0, b: 0, safe: 0, caution: 0, risky: 0, ro: 0, denied: 0, scanning: 0, match: false };
     s.n++;
-    if (!i.noTotal) { s.b += i.bytes; s[i.safety] += i.bytes; }
+    if (countable(i)) { s.b += i.bytes; s[i.safety] += i.bytes; }
     if (i.displayOnly) s.ro++;
     if (i.status === 'denied') s.denied++;
     if (i.status === 'scanning') s.scanning++;
-    if (i.group === 'duplicates') (s.sets ??= new Set()).add(i.project || '');
-    if (state.filters.q) {
-      const q = state.filters.q.toLowerCase();
-      if (i.name.toLowerCase().includes(q) || i.display.toLowerCase().includes(q)) s.match = true;
-    }
+    if (i.group === 'duplicates') (s.sets ??= new Set()).add(i.dupSet || i.project || '');
+    // the same test the rows use, so a search that matches 109 rows cannot
+    // leave every card dimmed as though nothing matched
+    if (state.filters.q && passesFilters(i)) s.match = true;
     stats.set(gid, s);
   }
   const q = state.filters.q.toLowerCase();
@@ -1215,7 +1237,7 @@ $('#modal-confirm').addEventListener('click', async () => {
       + (held > 0 ? ` (${held} held back to keep one copy of each duplicate set)` : ''));
     // track this run so the user gets a plain answer when it ends, instead of
     // rows quietly changing status somewhere down the page
-    state.run = { ids: new Set(r.accepted), pending: new Set(r.accepted), done: 0, failed: 0, mode, plannedBytes };
+    state.run = { ids: new Set(r.accepted), pending: new Set(r.accepted), done: 0, failed: 0, bytes: 0, mode, plannedBytes };
     for (const id of modalIds) state.selection.delete(id);
     markDirty();
   } catch (e) { toast('Delete failed: ' + e.message, true); }
@@ -1239,9 +1261,9 @@ function renderReceipt() {
   const moved = r.mode === 'trash';
   $('#receipt-title').textContent = moved
     ? `${fmtCount(r.done)} item${r.done === 1 ? '' : 's'} moved to the Trash`
-    : `${fmtCount(r.done)} item${r.done === 1 ? '' : 's'} deleted — ${fmtBytes(state.reclaimed)} freed`;
+    : `${fmtCount(r.done)} item${r.done === 1 ? '' : 's'} deleted — ${fmtBytes(r.bytes)} freed`;
   const bits = [];
-  if (moved) bits.push(`${fmtBytes(state.trashed)} is in the Trash and still on your disk. Emptying the Trash is what actually frees it.`);
+  if (moved) bits.push(`${fmtBytes(r.bytes)} is in the Trash and still on your disk. Emptying the Trash is what actually frees it.`);
   if (r.failed) bits.push(`${fmtCount(r.failed)} could not be removed — those rows show the reason and stay selectable so you can retry.`);
   $('#receipt-detail').textContent = bits.join(' ');
   const trashRow = [...state.items.values()].find(i => i.abs && i.abs.endsWith('/.Trash') && selectable(i));

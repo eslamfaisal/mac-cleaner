@@ -234,7 +234,10 @@ button.tile:hover { background: var(--surface-2); }
 
 /* ---------- narrow layout ---------- */
 @media (max-width: 760px) {
-  .row { grid-template-columns: 24px minmax(0, 1fr) 90px 52px; }
+  /* three icon buttons need ~79px of min-content; the old 52px cell let the
+     Keep button spill over the size text, so a tap meant to read the size hid
+     the row from every future scan instead */
+  .row { grid-template-columns: 24px minmax(0, 1fr) 78px 86px; }
   .row .r-status, .group-header .g-hidden, .group-header .g-safety { display: none; }
   .group-header .g-size { margin-left: auto; }
   .topbar { flex-wrap: wrap; row-gap: 8px; }

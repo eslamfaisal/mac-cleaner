@@ -145,7 +145,7 @@ function publicItem(i) {
     error: i.error || null, mtime: i.mtime || null,
     project: i.project ? (i.project.startsWith(HOME) ? '~' + i.project.slice(HOME.length) : i.project) : null,
     projectName: i.projectName || null,
-    dupNewest: !!i.dupNewest,
+    dupNewest: !!i.dupNewest, dupSet: i.dupSet || null,
     noTotal: !!i.noTotal,
   };
 }
@@ -328,14 +328,14 @@ function keepOneOfEachDuplicateSet(ids) {
   const bySet = new Map();
   for (const id of ids) {
     const item = scanner.items.get(id);
-    if (!item || item.group !== 'duplicates' || !item.project) continue;
-    if (!bySet.has(item.project)) bySet.set(item.project, []);
-    bySet.get(item.project).push(item);
+    if (!item || item.group !== 'duplicates' || !item.dupSet) continue;
+    if (!bySet.has(item.dupSet)) bySet.set(item.dupSet, []);
+    if (!bySet.get(item.dupSet).some(x => x.id === item.id)) bySet.get(item.dupSet).push(item);
   }
   const held = new Set();
-  for (const [proj, chosen] of bySet) {
+  for (const [setKey, chosen] of bySet) {
     const alive = [...scanner.items.values()].filter(i =>
-      i.project === proj && i.group === 'duplicates' &&
+      i.dupSet === setKey && i.group === 'duplicates' &&
       !['deleted', 'gone', 'missing'].includes(i.status));
     // once earlier deletes leave a single copy it is not a duplicate any more,
     // and refusing to delete it would strand the file forever
@@ -394,10 +394,14 @@ async function runDelete({ item, mode }) {
     } else {
       await permanentDelete(item);
     }
-    // A row whose bytes are already counted inside a row deleted earlier in
-    // this run must not add them a second time.
+    // A row whose bytes were already counted inside a row removed earlier must
+    // not add them again.
     if (!countedAlready(item)) {
-      deletedReals.push(item.real);
+      // Only record a real that really is gone. A kind:'files' row's real is
+      // its PARENT directory (~/Downloads, an .avd bundle) and a 'contents'
+      // delete leaves the directory standing — recording either would zero out
+      // every later delete underneath it.
+      if (item.kind !== 'files' && item.deleteMode !== 'contents') deletedReals.push(item.real);
       // Moving to the Trash frees nothing until the Trash is emptied — saying
       // otherwise is the difference between a number and a promise.
       if (trashed) trashedBytes += item.bytes || 0;
@@ -572,6 +576,10 @@ const server = http.createServer(async (req, res) => {
 
     switch (url.pathname) {
       case '/api/scan/start':
+        // paths recorded during the last run are meaningless against a fresh
+        // set of items — a cache that regenerated and is cleaned again must
+        // count again
+        deletedReals.length = 0;
         scanner.startScan();
         refreshDisk();
         broadcast('fda', { granted: fdaGranted() });
