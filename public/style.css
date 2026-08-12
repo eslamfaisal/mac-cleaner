@@ -174,7 +174,7 @@ button.tile:hover { background: var(--surface-2); }
 
 .row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 110px 90px 70px;
+  grid-template-columns: 28px minmax(0, 1fr) 110px 90px 96px;
   gap: 8px; align-items: center;
   padding: 7px 14px; border-top: 1px solid var(--grid);
 }
@@ -410,3 +410,33 @@ body.mode-normal .card-advanced .card-size { font-size: 20px; }
 }
 .toast.err { border-color: color-mix(in srgb, var(--risky) 50%, transparent); }
 @keyframes slidein { from { transform: translateY(8px); opacity: 0; } }
+
+/* ---------- honest totals, receipts, kept items ---------- */
+/* Space that exists but is not the user's to click away. Stated next to the
+   headline instead of hidden inside it. */
+.readonly-note { font-size: 12.5px; margin-top: 10px; line-height: 1.5; }
+
+/* What a row can still do when it cannot be deleted — visible text, because a
+   tooltip is unreachable on touch and invisible at a glance. */
+.r-note {
+  font-size: 12px; color: var(--ink-3);
+  white-space: normal; margin-top: 3px; max-width: 70ch;
+}
+
+.modal-list .m-badges { display: flex; gap: 4px; flex: 0 0 auto; }
+.dup-warn {
+  margin-top: 10px; font-size: 12.5px; color: var(--caution);
+  border: 1px solid color-mix(in srgb, var(--caution) 40%, transparent);
+  border-radius: 8px; padding: 8px 10px;
+}
+
+.receipt {
+  margin: 0 20px 16px; border: 1px solid color-mix(in srgb, var(--safe) 45%, transparent);
+  border-radius: 12px; background: color-mix(in srgb, var(--safe) 8%, var(--surface));
+  padding: 12px 14px;
+}
+.receipt-head { display: flex; gap: 10px; align-items: flex-start; }
+.receipt-head > div { flex: 1; }
+.receipt-icon { font-size: 18px; }
+.receipt-actions { display: flex; gap: 8px; margin-top: 10px; }
+.receipt-actions:empty { display: none; }

@@ -18,9 +18,11 @@ const state = {
   deleteModes: { normal: 'trash', dev: 'rm' },
   items: new Map(),          // id -> item
   selection: new Set(),
+  keep: new Set(),           // absolute paths the user chose to hold on to
   scan: { status: 'idle', tasksDone: 0, tasksTotal: 0 },
   disk: null,
   reclaimed: 0,
+  trashed: 0,
   commands: [],
   filters: {
     q: '',
@@ -128,6 +130,7 @@ function applySettings(s) {
   state.needsModeChoice = s.uiMode == null;
   state.uiMode = s.uiMode || 'normal';   // picker is showing anyway when null
   if (s.deleteMode) state.deleteModes = { ...state.deleteModes, ...s.deleteMode };
+  state.keep = new Set(s.keep || []);
   document.body.classList.toggle('mode-normal', state.uiMode === 'normal');
   $('#mode-onboard').hidden = !state.needsModeChoice;
   renderModeToggles();
@@ -159,6 +162,26 @@ function setUiMode(mode, { persist = true } = {}) {
   markDirty();
 }
 
+// "I know about this one and I want to keep it." Without this every scan
+// re-asks the same question, and the answer is re-made by hand every time.
+function keepItem(id) {
+  const item = state.items.get(id);
+  if (!item || !item.abs) return;
+  state.keep.add(item.abs);
+  state.selection.delete(id);
+  saveSettings({ keepAdd: item.abs });
+  toast(`Keeping ${displayName(item)} — hidden from scans until you restore it.`);
+  markDirty();
+}
+
+function unkeepAll() {
+  state.keep = new Set();
+  saveSettings({ keepClear: true });
+  markDirty();
+}
+
+const isKept = (i) => state.keep.has(i.abs);
+
 function setDeleteMode(mode) {
   if (mode !== 'trash' && mode !== 'rm') return;
   state.deleteModes[state.uiMode] = mode;
@@ -182,6 +205,7 @@ function connect() {
     state.scan = snap.scan;
     state.disk = snap.disk;
     state.reclaimed = snap.reclaimed;
+    state.trashed = snap.trashed || 0;
     state.commands = snap.commands;
     state.fda = snap.fda;
     state.appMode = snap.appMode;
@@ -204,11 +228,22 @@ function connect() {
     markDirty();
   });
   es.addEventListener('items', (e) => {
+    let failed = 0;
     for (const item of JSON.parse(e.data)) {
+      const before = state.items.get(item.id);
       state.items.set(item.id, item);
       if (['deleted', 'gone', 'missing'].includes(item.status)) state.selection.delete(item.id);
-      if (item.status === 'error' && item.error) toast(`${item.name}: ${item.error}`, true);
+      if (item.status === 'error' && item.error && before?.status !== 'error') failed++;
+      // a run is finished once nothing is queued or mid-delete any more
+      if (state.run && ['deleted', 'gone', 'error', 'missing'].includes(item.status) && state.run.ids.has(item.id)) {
+        state.run.pending.delete(item.id);
+        if (item.status === 'deleted') state.run.done++;
+        else if (item.status === 'error') state.run.failed++;
+      }
     }
+    // one message per batch: a failed bulk clean used to fire a toast per row
+    if (failed) toast(`${fmtCount(failed)} item${failed === 1 ? '' : 's'} could not be removed — see the ⚠ rows.`, true);
+    if (state.run && state.run.pending.size === 0) finishRun();
     markDirty();
   });
   es.addEventListener('progress', (e) => { state.scan = JSON.parse(e.data); markDirty(); });
@@ -229,7 +264,12 @@ function connect() {
     markDirty();
   });
   es.addEventListener('disk', (e) => { state.disk = JSON.parse(e.data); markDirty(); });
-  es.addEventListener('reclaimed', (e) => { state.reclaimed = JSON.parse(e.data).bytes; markDirty(); });
+  es.addEventListener('reclaimed', (e) => {
+    const r = JSON.parse(e.data);
+    state.reclaimed = r.bytes;
+    state.trashed = r.trashed || 0;
+    markDirty();
+  });
   es.addEventListener('fda', (e) => {
     const granted = JSON.parse(e.data).granted;
     const was = state.fda;
@@ -276,8 +316,14 @@ function buildGroupSections() {
     check.addEventListener('change', () => {
       // operate on ALL selectable items of the group (not just filtered-visible
       // ones) so the checkbox always reflects what would actually be deleted
-      const items = [...state.items.values()].filter(i => groupOf(i) === g.id && selectable(i));
-      for (const i of items) check.checked ? state.selection.add(i.id) : state.selection.delete(i.id);
+      const all = [...state.items.values()].filter(i => groupOf(i) === g.id);
+      // …and honour the same rule the sub-headers use, so ticking a whole
+      // duplicates category still leaves one copy of every set behind
+      const rule = clusterRuleFor(g.id, all);
+      for (const i of all) {
+        if (!clusterSelectable(i, rule)) continue;
+        check.checked ? state.selection.add(i.id) : state.selection.delete(i.id);
+      }
       markDirty();
     });
     container.appendChild(section);
@@ -318,16 +364,52 @@ function buildCommands() {
 // ------------------------------------------------------------- filters ----
 
 function selectable(i) {
-  return !i.displayOnly && !['deleted', 'gone', 'missing', 'deleting', 'queued'].includes(i.status);
+  return !i.displayOnly && !isKept(i)
+    && !['deleted', 'gone', 'missing', 'deleting', 'queued'].includes(i.status);
+}
+
+// Two rules, used everywhere a number is produced, so no two places disagree.
+//   countable   — these bytes exist on disk and are counted exactly once
+//                 (noTotal rows live inside another row that already counts them)
+//   reclaimable — of those, the ones a click can actually free. Read-only rows
+//                 are shown to explain where space went; adding them to a
+//                 "you can free up" figure is a lie, and on a Mac with a Photos
+//                 library it is a 100 GB lie.
+function countable(i) {
+  return !['deleted', 'gone', 'missing'].includes(i.status) && !i.noTotal && !isKept(i);
+}
+
+function reclaimable(i) {
+  return countable(i) && !i.displayOnly;
+}
+
+// Bytes a selection would actually free: a child inside an already-selected
+// folder is not counted twice.
+function selectionBytes(items) {
+  // shortest path first, so a parent is always seen before its children
+  const ordered = [...items].sort((a, b) => a.display.length - b.display.length);
+  const roots = [];
+  let bytes = 0;
+  for (const i of ordered) {
+    if (roots.some(r => i.display.startsWith(r))) continue;
+    roots.push(i.display + '/');
+    bytes += i.bytes;
+  }
+  return bytes;
 }
 
 function passesFilters(i) {
   if (['missing'].includes(i.status)) return false;
+  if (isKept(i)) return false;
   if (state.filters.safety && i.safety !== state.filters.safety) return false;
   if (i.bytes < state.filters.minBytes && i.status !== 'scanning' && i.status !== 'denied') return false;
   if (state.filters.q) {
     const q = state.filters.q.toLowerCase();
-    if (!i.name.toLowerCase().includes(q) && !i.display.toLowerCase().includes(q)) return false;
+    // also match what the row actually shows: normal mode strips bundle ids
+    // from the name and puts the explanation where the path used to be, so
+    // searching for the words on screen has to work
+    const hay = [i.name, i.display, displayName(i), state.uiMode === 'normal' ? i.why : ''];
+    if (!hay.some(h => h && h.toLowerCase().includes(q))) return false;
   }
   return true;
 }
@@ -359,11 +441,22 @@ function clearFilters() {
 function renderFilterChip() {
   const chip = $('#clear-filters');
   const labels = activeFilterLabels();
-  const hidden = [...state.items.values()].filter(i => i.status !== 'missing' && !passesFilters(i)).length;
+  const hidden = [...state.items.values()]
+    .filter(i => i.status !== 'missing' && !isKept(i) && !passesFilters(i)).length;
   chip.hidden = !labels.length || hidden === 0;
   if (!chip.hidden) {
     chip.textContent = `${fmtCount(hidden)} hidden by: ${labels.join(' · ')} — clear ✕`;
     chip.title = 'Clear the size, safety and text filters';
+  }
+
+  // kept items are a deliberate choice, not a filter — its own chip, and the
+  // only way back, so "keep" never becomes a one-way door
+  const kept = $('#kept-chip');
+  const keptCount = [...state.items.values()].filter(isKept).length;
+  kept.hidden = keptCount === 0;
+  if (keptCount) {
+    kept.textContent = `📌 ${fmtCount(keptCount)} kept — show again`;
+    kept.title = 'Stop hiding the items you chose to keep';
   }
 }
 
@@ -374,6 +467,7 @@ setInterval(() => { if (dirty) { dirty = false; render(); } }, 250);
 function render() {
   renderHeader();
   renderSummary();
+  renderReceipt();
   if (state.view.name === 'group') renderDetail();
   else if (state.view.name === 'settings') renderSettings();
   else renderCards();
@@ -404,13 +498,27 @@ function renderHeader() {
     $('#walk-dir').textContent = '';
   }
 
-  $('#reclaimed').textContent = '♻️ ' + fmtBytes(state.reclaimed);
+  // Bytes moved to the Trash are not freed yet — labelling them "reclaimed"
+  // is a promise the Trash has not kept.
+  const rec = $('#reclaimed');
+  if (state.trashed > 0 && state.reclaimed === 0) {
+    rec.textContent = '🗑️ ' + fmtBytes(state.trashed) + ' in Trash';
+    rec.title = 'Moved to the Trash — emptying it is what frees the space';
+  } else if (state.trashed > 0) {
+    rec.textContent = '♻️ ' + fmtBytes(state.reclaimed) + ' · 🗑️ ' + fmtBytes(state.trashed);
+    rec.title = 'Freed permanently · waiting in the Trash';
+  } else {
+    rec.textContent = '♻️ ' + fmtBytes(state.reclaimed);
+    rec.title = 'Space freed this session';
+  }
 
   if (state.disk) {
     const used = state.disk.total - state.disk.free;
     const usedPct = used / state.disk.total * 100;
     let cleanable = 0;
-    for (const i of state.items.values()) if ((i.status === 'done' || i.status === 'scanning') && !i.noTotal) cleanable += i.bytes;
+    for (const i of state.items.values()) {
+      if ((i.status === 'done' || i.status === 'scanning') && reclaimable(i)) cleanable += i.bytes;
+    }
     const cleanPct = Math.min(cleanable / state.disk.total * 100, usedPct);
     $('#disk-used').style.width = usedPct + '%';
     const cl = $('#disk-clean');
@@ -474,8 +582,15 @@ function renderFda() {
 function renderSummary() {
   const totals = { all: 0, safe: 0, caution: 0, risky: 0 };
   const byGroup = new Map();
+  let readOnlyBytes = 0;
+  let readOnlyTop = null;
   for (const i of state.items.values()) {
-    if (['deleted', 'gone', 'missing'].includes(i.status) || i.noTotal) continue;
+    if (!countable(i)) continue;
+    if (i.displayOnly) {
+      readOnlyBytes += i.bytes;
+      if (!readOnlyTop || i.bytes > readOnlyTop.bytes) readOnlyTop = i;
+      continue;
+    }
     totals.all += i.bytes;
     totals[i.safety] += i.bytes;
     const gid = groupOf(i);
@@ -485,13 +600,26 @@ function renderSummary() {
   $('#tile-total .tile-label').textContent =
     state.uiMode === 'normal' ? 'you can free up' : 'cleanable found';
 
+  // Space that is real but not yours to click away (Photos library, Time
+  // Machine snapshots, macOS-managed caches). Kept out of the headline and
+  // stated plainly instead, so the two numbers never contradict each other.
+  const roNote = $('#readonly-note');
+  if (readOnlyBytes > 0) {
+    roNote.hidden = false;
+    const biggest = readOnlyTop && readOnlyTop.bytes > readOnlyBytes / 3
+      ? ` — mostly ${readOnlyTop.name} (${fmtBytes(readOnlyTop.bytes)})` : '';
+    roNote.textContent = `+ ${fmtBytes(readOnlyBytes)} that macOS and your apps manage themselves${biggest}. Shown so you can see where the space went; this tool never deletes it.`;
+  } else {
+    roNote.hidden = true;
+  }
+
   // live label: what "Select all safe" would actually grab (same exclusions),
   // plus WHY the rest of the safe total is not in it — the two numbers looking
   // unrelated is otherwise the most confusing thing on the screen
   let bulkSafe = 0;
   const skipped = { active: 0, trash: 0, other: 0 };
   for (const i of state.items.values()) {
-    if (i.safety !== 'safe' || ['deleted', 'gone', 'missing'].includes(i.status) || i.noTotal) continue;
+    if (i.safety !== 'safe' || !reclaimable(i)) continue;
     if (!selectable(i)) { skipped.other += i.bytes; continue; }
     if (i.permanentOnly) { skipped.trash += i.bytes; continue; }
     if ((i.badges || []).includes('active project')) { skipped.active += i.bytes; continue; }
@@ -570,11 +698,11 @@ function renderGroups() {
     const vis = sortItems(visByGroup.get(g.id) || []);
     els.section.hidden = false;
 
-    const totalBytes = all.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0);
+    const totalBytes = all.reduce((s, i) => countable(i) ? s + i.bytes : s, 0);
     els.size.textContent = fmtBytes(totalBytes);
 
     const bySafety = { safe: 0, caution: 0, risky: 0 };
-    for (const i of all) if (!['deleted', 'gone'].includes(i.status)) bySafety[i.safety] += i.bytes;
+    for (const i of all) if (countable(i)) bySafety[i.safety] += i.bytes;
     els.safety.innerHTML = ['safe', 'caution', 'risky']
       .filter(s => bySafety[s] > 0)
       .map(s => `<span class="gs gs-${s}"><span class="dot dot-${s}"></span>${fmtBytes(bySafety[s])}</span>`)
@@ -587,7 +715,10 @@ function renderGroups() {
     els.hidden.classList.toggle('clickable', hiddenCount > 0);
     els.hidden.title = hiddenCount > 0 ? `Hidden by: ${activeFilterLabels().join(' · ')}. Click to clear filters.` : '';
 
-    const selectableAll = all.filter(selectable);
+    // must match exactly what the header checkbox selects — including the
+    // duplicate keeper it deliberately leaves alone
+    const headerRule = clusterRuleFor(g.id, all);
+    const selectableAll = all.filter(i => clusterSelectable(i, headerRule));
     const selCount = selectableAll.filter(i => state.selection.has(i.id)).length;
     els.check.checked = selCount > 0 && selCount === selectableAll.length;
     els.check.indeterminate = selCount > 0 && selCount < selectableAll.length;
@@ -612,7 +743,7 @@ function renderGroups() {
         byKey.get(key).push(item);
       }
       const clusters = [...byKey.entries()]
-        .map(([proj, items]) => ({ proj, items, gid: g.id, rule: cluster, total: items.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0) }))
+        .map(([proj, items]) => ({ proj, items, gid: g.id, rule: cluster, total: items.reduce((s, i) => countable(i) ? s + i.bytes : s, 0) }))
         .sort((a, b) => b.total - a.total);
       for (const c of clusters) {
         const phId = 'ph:' + g.id + ':' + c.proj;
@@ -625,8 +756,7 @@ function renderGroups() {
           seen.add(item.id);
           let row = rowEls.get(item.id);
           if (!row) { row = buildRow(item); rowEls.set(item.id, row); }
-          updateRow(row, item);
-          row.classList.add('row-indent');
+          updateRow(row, item, true);
           place(row);
         }
       }
@@ -681,9 +811,12 @@ function clusterRuleFor(gid, items) {
 // "tick the set" reclaims space while always keeping one file
 const clusterSelectable = (i, rule) => selectable(i) && !(rule?.skipNewest && i.dupNewest);
 
+// Every item of the cluster, filters ignored on purpose: a checkbox must act
+// on what it says it acts on. Filters hide rows; they never silently shrink a
+// bulk action (the "N filtered out — show" line already discloses the gap).
 function clusterItems(gid, proj, rule) {
   return [...state.items.values()].filter(i =>
-    groupOf(i) === gid && rule.key(i) === proj && passesFilters(i));
+    i.status !== 'missing' && groupOf(i) === gid && rule.key(i) === proj);
 }
 
 function buildProjectHeader(phId, proj, gid, rule) {
@@ -716,7 +849,9 @@ function updateProjectHeader(ph, c) {
   ph.querySelector('.ph-size').textContent = fmtBytes(c.total);
   ph.querySelector('.ph-count').textContent =
     `${fmtCount(c.items.length)} ${c.items.length === 1 ? one : many}`;
-  const selectableItems = c.items.filter(i => clusterSelectable(i, c.rule));
+  // state is computed over everything the checkbox would touch, not just the
+  // rows currently visible — otherwise it renders indeterminate forever
+  const selectableItems = clusterItems(c.gid, c.proj, c.rule).filter(i => clusterSelectable(i, c.rule));
   const sel = selectableItems.filter(i => state.selection.has(i.id)).length;
   const check = ph.querySelector('input');
   check.checked = sel > 0 && sel === selectableItems.length;
@@ -733,13 +868,16 @@ function buildRow(item) {
     <div class="r-main">
       <div class="r-name"><span class="nm"></span></div>
       <div class="r-path"></div>
+      <div class="r-note" hidden></div>
     </div>
     <div class="r-status"></div>
     <div class="r-size"></div>
     <div class="r-actions">
+      <button class="icon-btn act-keep" title="Keep this — hide it from future scans">📌</button>
       <button class="icon-btn act-reveal" title="Reveal in Finder">🔍</button>
       <button class="icon-btn act-delete" title="Delete this item">🗑️</button>
     </div>`;
+  row.querySelector('.act-keep').addEventListener('click', () => keepItem(item.id));
   row.querySelector('input').addEventListener('change', (e) => {
     e.target.checked ? state.selection.add(item.id) : state.selection.delete(item.id);
     markDirty();
@@ -752,8 +890,12 @@ function buildRow(item) {
   return row;
 }
 
-function updateRow(row, item) {
-  row.className = 'row status-' + item.status + (item.displayOnly ? ' display-only' : '');
+function updateRow(row, item, indent) {
+  // one assignment with every modifier included: writing the class twice per
+  // render (here, then .classList.add('row-indent') in the caller) restyled
+  // every row on every tick
+  const cls = 'row status-' + item.status + (item.displayOnly ? ' display-only' : '') + (indent ? ' row-indent' : '');
+  if (row.className !== cls) row.className = cls;
   const check = row.querySelector('input');
   check.checked = state.selection.has(item.id);
   check.disabled = !selectable(item);
@@ -781,8 +923,24 @@ function updateRow(row, item) {
       el.textContent = b;
       nameEl.appendChild(el);
     }
-    row.title = (item.why ? item.why : '') + (item.regen ? '\n↩ ' + item.regen : '');
   }
+  // outside the badge guard: why/regen change after a scan (backup labels,
+  // carve-outs), and a tooltip frozen at first render would then be wrong
+  const title = (item.why || '') + (item.regen ? '\n↩ ' + item.regen : '');
+  if (row.title !== title) row.title = title;
+
+  // A row nobody can act on must say what the user CAN do, on screen — a
+  // hover tooltip is invisible on a trackpad-less glance and unreachable on
+  // touch, and in normal mode the fallback advice ("see suggested commands")
+  // pointed at a section that mode hides.
+  const note = row.querySelector('.r-note');
+  const needsNote = item.displayOnly || item.needs;
+  const noteText = !needsNote ? ''
+    : item.needs === 'fda' && state.fda === false
+      ? 'Needs Full Disk Access before its real size can be measured — grant it above, then rescan.'
+      : (item.regen || '');
+  if (note.textContent !== noteText) note.textContent = noteText;
+  note.hidden = !noteText;
   // Normal mode answers "what is this?" on the second line; the path is a
   // developer's question and stays in the tooltip and the Reveal button.
   const age = item.mtime ? '  ·  ' + fmtAge(item.mtime) : '';
@@ -809,9 +967,11 @@ function renderSelectionBar() {
   const bar = $('#selection-bar');
   bar.hidden = ids.length === 0;
   if (ids.length) {
-    let bytes = 0;
+    const items = ids.map(id => state.items.get(id));
+    // a folder and something inside it can both be ticked — count the bytes once
+    const bytes = selectionBytes(items);
     const by = { safe: 0, caution: 0, risky: 0 };
-    for (const id of ids) { const i = state.items.get(id); bytes += i.bytes; by[i.safety] += i.bytes; }
+    for (const i of items) by[i.safety] += i.bytes;
     $('#sel-count').textContent = fmtCount(ids.length);
     $('#sel-size').textContent = fmtBytes(bytes);
     $('#sel-breakdown').innerHTML = ['safe', 'caution', 'risky']
@@ -970,7 +1130,13 @@ function openModal(ids) {
   const items = modalIds.map(id => state.items.get(id)).sort((a, b) => b.bytes - a.bytes);
   const risky = items.filter(i => i.safety === 'risky');
   const normal = items.filter(i => i.safety !== 'risky');
-  const total = items.reduce((s, i) => s + i.bytes, 0);
+  const total = selectionBytes(items);
+  // A duplicate set the user is about to wipe entirely: every copy selected,
+  // none kept. Worth saying out loud, in the one dialog that can still stop it.
+  const dupSets = new Map();
+  for (const i of items) if (i.dupNewest !== undefined && i.project) dupSets.set(i.project, (dupSets.get(i.project) || 0) + 1);
+  const wipedSets = [...dupSets].filter(([proj, n]) =>
+    n === [...state.items.values()].filter(x => x.project === proj && selectable(x)).length);
 
   const permanentOnly = items.filter(i => i.permanentOnly);
   let modeText = deleteMode() === 'trash'
@@ -986,9 +1152,17 @@ function openModal(ids) {
     for (const i of list.slice(0, 40)) {
       const r = document.createElement('div');
       r.className = 'm-row';
-      r.innerHTML = `<span class="dot dot-${i.safety}"></span><span class="m-name"></span><span class="m-size"></span>`;
+      r.innerHTML = `<span class="dot dot-${i.safety}"></span><span class="m-name"></span><span class="m-badges"></span><span class="m-size"></span>`;
       r.querySelector('.m-name').textContent = state.uiMode === 'normal'
         ? displayName(i) : i.name + '  ·  ' + i.display;
+      // badges carry the "newest — suggest keep" marker: hiding it here is how
+      // a user deletes the copy they meant to keep without ever seeing a warning
+      for (const b of i.badges || []) {
+        const el = document.createElement('span');
+        el.className = 'badge badge-info';
+        el.textContent = b;
+        r.querySelector('.m-badges').appendChild(el);
+      }
       r.querySelector('.m-size').textContent = fmtBytes(i.bytes);
       el.appendChild(r);
     }
@@ -1003,6 +1177,11 @@ function openModal(ids) {
   $('#modal-list').style.display = normal.length ? '' : 'none';
   $('#modal-risky').hidden = risky.length === 0;
   if (risky.length) { fill($('#modal-risky-list'), risky); $('#risky-ack').checked = false; }
+  const warn = $('#modal-dup-warn');
+  warn.hidden = wipedSets.length === 0;
+  if (wipedSets.length) {
+    warn.textContent = `⚠️ ${wipedSets.length} duplicate set${wipedSets.length === 1 ? '' : 's'} would lose every copy — no file is kept. Untick one copy per set to keep it.`;
+  }
   $('#modal-total').textContent = `${fmtCount(items.length)} items — ${fmtBytes(total)}`;
   updateModalConfirm();
   $('#modal').hidden = false;
@@ -1022,13 +1201,56 @@ $('#modal-confirm').addEventListener('click', async () => {
   // items may have changed state while the modal was open — re-filter
   modalIds = modalIds.filter(id => { const i = state.items.get(id); return i && selectable(i); });
   if (!modalIds.length) { toast('Nothing left to clean — items changed while confirming.'); return; }
+  const mode = deleteMode();
+  const plannedBytes = selectionBytes(modalIds.map(id => state.items.get(id)));
   try {
-    const r = await post('/api/delete', { ids: modalIds, mode: deleteMode() });
-    toast(`Cleaning ${r.accepted.length} item${r.accepted.length === 1 ? '' : 's'}…`);
+    const r = await post('/api/delete', { ids: modalIds, mode });
+    const held = modalIds.length - r.accepted.length;
+    if (!r.accepted.length) {
+      toast('Nothing was removed — one copy of each duplicate set is always kept. Untick the copy you want to keep and select the others.', true);
+      markDirty();
+      return;
+    }
+    toast(`Cleaning ${r.accepted.length} item${r.accepted.length === 1 ? '' : 's'}…`
+      + (held > 0 ? ` (${held} held back to keep one copy of each duplicate set)` : ''));
+    // track this run so the user gets a plain answer when it ends, instead of
+    // rows quietly changing status somewhere down the page
+    state.run = { ids: new Set(r.accepted), pending: new Set(r.accepted), done: 0, failed: 0, mode, plannedBytes };
     for (const id of modalIds) state.selection.delete(id);
     markDirty();
   } catch (e) { toast('Delete failed: ' + e.message, true); }
 });
+
+// ------------------------------------------------------------- receipt ----
+
+function finishRun() {
+  const run = state.run;
+  state.run = null;
+  if (!run || (run.done === 0 && run.failed === 0)) return;
+  state.receipt = { ...run, at: Date.now() };
+  markDirty();
+}
+
+function renderReceipt() {
+  const r = state.receipt;
+  const el = $('#receipt');
+  el.hidden = !r || state.view.name === 'settings';
+  if (!r) return;
+  const moved = r.mode === 'trash';
+  $('#receipt-title').textContent = moved
+    ? `${fmtCount(r.done)} item${r.done === 1 ? '' : 's'} moved to the Trash`
+    : `${fmtCount(r.done)} item${r.done === 1 ? '' : 's'} deleted — ${fmtBytes(state.reclaimed)} freed`;
+  const bits = [];
+  if (moved) bits.push(`${fmtBytes(state.trashed)} is in the Trash and still on your disk. Emptying the Trash is what actually frees it.`);
+  if (r.failed) bits.push(`${fmtCount(r.failed)} could not be removed — those rows show the reason and stay selectable so you can retry.`);
+  $('#receipt-detail').textContent = bits.join(' ');
+  const trashRow = [...state.items.values()].find(i => i.abs && i.abs.endsWith('/.Trash') && selectable(i));
+  $('#receipt-trash').hidden = !(moved && trashRow);
+  $('#receipt-trash').onclick = () => {
+    if (trashRow) openModal([trashRow.id]);
+  };
+  $('#receipt-errors').hidden = !r.failed;
+}
 
 // ------------------------------------------------------------- wire up ----
 
@@ -1051,6 +1273,15 @@ $('#fda-lock').addEventListener('click', () => {
 });
 
 $('#clear-filters').addEventListener('click', clearFilters);
+$('#kept-chip').addEventListener('click', unkeepAll);
+$('#receipt-dismiss').addEventListener('click', () => { state.receipt = null; markDirty(); });
+$('#receipt-errors').addEventListener('click', () => {
+  state.filters.q = '';
+  $('#search').value = '';
+  state.filters.minBytes = 0;
+  $('#min-size').value = '0';
+  markDirty();
+});
 $('#search').addEventListener('input', (e) => { state.filters.q = e.target.value.trim(); markDirty(); });
 $('#min-size').addEventListener('change', (e) => { state.filters.minBytes = Number(e.target.value); markDirty(); });
 $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; markDirty(); });
@@ -1076,7 +1307,10 @@ for (const tile of document.querySelectorAll('.tile-safety')) {
 }
 
 $('#select-safe').addEventListener('click', () => {
-  for (const i of visibleItems()) {
+  // Acts on every safe item, not just the ones a filter happens to be showing
+  // — the button's own label states the total it will select, and with a
+  // safety tile active "visible" would have meant nothing at all.
+  for (const i of state.items.values()) {
     // permanentOnly (Trash) never joins bulk-safe: emptying it is irreversible.
     // noTotal items live inside a build dir that gets selected anyway.
     if (i.safety === 'safe' && selectable(i) && !i.permanentOnly && !i.noTotal

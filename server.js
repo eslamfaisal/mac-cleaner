@@ -16,7 +16,9 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Scanner, GROUPS, NORMAL_GROUPS, HOME } from './lib/scanner.js';
-import { SUGGESTED_COMMANDS } from './lib/categories.js';
+import { SUGGESTED_COMMANDS, WALK } from './lib/categories.js';
+
+const PACKAGE_SKIPS = WALK.packageSkips;
 
 // PORT=0 asks the OS for an ephemeral port (used by the .app wrapper, which
 // reads the LISTENING line from stdout). boundPort is the real port once bound.
@@ -30,7 +32,9 @@ let APP_VERSION = 'dev';
 try { APP_VERSION = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim(); } catch {}
 
 const scanner = new Scanner();
-let reclaimedBytes = 0;
+let reclaimedBytes = 0;   // permanently removed — space is back
+let trashedBytes = 0;     // moved to the Trash — space returns when it is emptied
+const deletedReals = [];  // guards against counting nested deletes twice
 let disk = null;
 
 // ---------------------------------------------------------- preferences ----
@@ -40,7 +44,9 @@ let disk = null;
 //   uiMode: null  → first run, the UI shows the mode picker
 const SETTINGS_DIR = path.join(HOME, 'Library/Application Support/Mac Cleaner');
 const SETTINGS_PATH = path.join(SETTINGS_DIR, 'settings.json');
-const DEFAULT_SETTINGS = { uiMode: null, deleteMode: { normal: 'trash', dev: 'rm' } };
+//   keep: paths the user decided to hold on to — never offered again
+const DEFAULT_SETTINGS = { uiMode: null, deleteMode: { normal: 'trash', dev: 'rm' }, keep: [] };
+const KEEP_MAX = 2000;
 
 function loadSettings() {
   try {
@@ -51,6 +57,9 @@ function loadSettings() {
         normal: raw.deleteMode?.normal === 'rm' ? 'rm' : 'trash',
         dev: raw.deleteMode?.dev === 'trash' ? 'trash' : 'rm',
       },
+      keep: Array.isArray(raw.keep)
+        ? raw.keep.filter(p => typeof p === 'string' && path.isAbsolute(p)).slice(0, KEEP_MAX)
+        : [],
     };
   } catch { return structuredClone(DEFAULT_SETTINGS); }
 }
@@ -65,6 +74,13 @@ async function saveSettings(patch) {
       if (v === 'trash' || v === 'rm') settings.deleteMode[m] = v;
     }
   }
+  if (typeof patch.keepAdd === 'string' && path.isAbsolute(patch.keepAdd)) {
+    if (!settings.keep.includes(patch.keepAdd)) settings.keep = [...settings.keep, patch.keepAdd].slice(-KEEP_MAX);
+  }
+  if (typeof patch.keepRemove === 'string') {
+    settings.keep = settings.keep.filter(p => p !== patch.keepRemove);
+  }
+  if (patch.keepClear === true) settings.keep = [];
   try {
     await fsp.mkdir(SETTINGS_DIR, { recursive: true });
     await fsp.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2));
@@ -106,7 +122,7 @@ setInterval(() => {
   if (dirtyFlags.progress) { broadcast('progress', scanner.state()); dirtyFlags.progress = false; }
   if (dirtyFlags.scan) { broadcast('scan', scanner.state()); dirtyFlags.scan = false; }
   if (walkStatusDir) { broadcast('walk', { dir: walkStatusDir.startsWith(HOME) ? '~' + walkStatusDir.slice(HOME.length) : walkStatusDir }); walkStatusDir = null; }
-  if (dirtyFlags.reclaimed) { broadcast('reclaimed', { bytes: reclaimedBytes }); dirtyFlags.reclaimed = false; }
+  if (dirtyFlags.reclaimed) { broadcast('reclaimed', { bytes: reclaimedBytes, trashed: trashedBytes }); dirtyFlags.reclaimed = false; }
   if (dirtyFlags.disk) { broadcast('disk', disk); dirtyFlags.disk = false; }
 }, 100);
 
@@ -120,7 +136,9 @@ scanner.on('done', () => { dirtyFlags.scan = true; refreshDisk(); });
 
 function publicItem(i) {
   return {
-    id: i.id, group: i.group, normalGroup: i.normalGroup, name: i.name, display: i.display, safety: i.safety,
+    // abs is what the keep list is keyed on: display is home-relative and two
+    // different volumes can produce the same "~" string
+    id: i.id, group: i.group, normalGroup: i.normalGroup, name: i.name, display: i.display, abs: i.path, safety: i.safety,
     why: i.why, regen: i.regen, kind: i.kind, deleteMode: i.deleteMode,
     permanentOnly: i.permanentOnly, displayOnly: i.displayOnly, needs: i.needs || null, badges: i.badges,
     status: i.status, bytes: i.bytes, files: i.files, denied: i.denied,
@@ -140,6 +158,7 @@ function snapshot() {
     scan: scanner.state(),
     disk,
     reclaimed: reclaimedBytes,
+    trashed: trashedBytes,
     commands: SUGGESTED_COMMANDS,
     home: HOME,
     bootId: BOOT_ID,
@@ -228,13 +247,35 @@ const BANNED_PREFIXES = [
 // Per-volume Trash: "/Volumes/<name>/.Trashes/<uid>" and anything inside it.
 const VOLUME_TRASH_RE = /^\/Volumes\/[^/]+\/\.Trashes\/\d+(\/|$)/;
 
+// A file inside a Photos/Music/Final Cut library is not a document — removing
+// one corrupts the whole library. The scanner never offers these, and this is
+// the backstop that keeps that true regardless of what the scanner emits.
+function insideMediaLibrary(norm) {
+  const segs = norm.split('/');
+  for (let i = 0; i < segs.length - 1; i++) {
+    const s = segs[i].toLowerCase();
+    if (PACKAGE_SKIPS.some(x => s.endsWith(x))) return true;
+  }
+  return false;
+}
+
 function validateDeletablePath(p) {
   // Throws with a reason when the path must not be deleted.
   if (typeof p !== 'string' || !path.isAbsolute(p)) throw new Error('invalid path');
   const norm = path.normalize(p);
   if (norm.includes('..')) throw new Error('invalid path');
   if (BANNED_EXACT.has(norm)) throw new Error('protected path');
-  for (const b of BANNED_PREFIXES) if (norm.startsWith(b)) throw new Error('protected path');
+  if (insideMediaLibrary(norm)) throw new Error('inside a media library — manage it from the app that owns it');
+  for (const b of BANNED_PREFIXES) {
+    if (!norm.startsWith(b)) continue;
+    // Say which rule stopped it. "protected path" on a Dropbox folder that
+    // resolves into ~/Library/CloudStorage reads like a bug; the real reason
+    // is that removing it would delete the file from the cloud as well.
+    const cloud = b.includes('Mobile Documents') || b.includes('CloudStorage');
+    throw new Error(cloud
+      ? 'stored in the cloud — use Finder’s “Remove Download” so the file stays in iCloud/Dropbox'
+      : 'protected path');
+  }
   // trash on another mounted disk — the only path outside the allowed roots
   if (VOLUME_TRASH_RE.test(norm)) return norm;
   if (!ALLOWED_ROOTS.some(r => norm.startsWith(r))) throw new Error('outside allowed roots');
@@ -279,9 +320,39 @@ function validateItemForDelete(item) {
 const deleteQueue = [];
 let deleting = 0;
 
+// A duplicate cluster exists to save space while keeping one copy. A batch
+// holding every surviving copy of a set is always a mistake (a stray "select
+// all" reaching rows the UI meant to protect), so the newest copy is held back
+// here regardless of what the client asked for.
+function keepOneOfEachDuplicateSet(ids) {
+  const bySet = new Map();
+  for (const id of ids) {
+    const item = scanner.items.get(id);
+    if (!item || item.group !== 'duplicates' || !item.project) continue;
+    if (!bySet.has(item.project)) bySet.set(item.project, []);
+    bySet.get(item.project).push(item);
+  }
+  const held = new Set();
+  for (const [proj, chosen] of bySet) {
+    const alive = [...scanner.items.values()].filter(i =>
+      i.project === proj && i.group === 'duplicates' &&
+      !['deleted', 'gone', 'missing'].includes(i.status));
+    // once earlier deletes leave a single copy it is not a duplicate any more,
+    // and refusing to delete it would strand the file forever
+    if (alive.length < 2) continue;
+    if (chosen.length < alive.length) continue; // at least one copy survives
+    // keep the one the scan marked as the suggested keeper, else the newest
+    const keeper = chosen.find(i => i.dupNewest) || chosen[0];
+    held.add(keeper.id);
+  }
+  return held;
+}
+
 function enqueueDelete(ids, mode) {
   const accepted = [];
+  const held = keepOneOfEachDuplicateSet(ids);
   for (const id of ids) {
+    if (held.has(id)) continue;
     const item = scanner.items.get(id);
     if (!item || item.displayOnly || ['deleting', 'deleted', 'gone', 'missing'].includes(item.status)) continue;
     item.status = 'queued';
@@ -316,18 +387,32 @@ async function runDelete({ item, mode }) {
   }
   scanner.markDeleting(item.id);
   try {
+    let trashed = false;
     if (mode === 'trash' && !item.permanentOnly) {
       await moveToTrash(item);
+      trashed = true;
     } else {
       await permanentDelete(item);
     }
-    reclaimedBytes += item.bytes || 0;
-    dirtyFlags.reclaimed = true;
+    // A row whose bytes are already counted inside a row deleted earlier in
+    // this run must not add them a second time.
+    if (!countedAlready(item)) {
+      deletedReals.push(item.real);
+      // Moving to the Trash frees nothing until the Trash is emptied — saying
+      // otherwise is the difference between a number and a promise.
+      if (trashed) trashedBytes += item.bytes || 0;
+      else reclaimedBytes += item.bytes || 0;
+      dirtyFlags.reclaimed = true;
+    }
     scanner.markDeleted(item.id, true);
     refreshDisk();
   } catch (e) {
     scanner.markDeleted(item.id, false, friendlyError(e));
   }
+}
+
+function countedAlready(item) {
+  return deletedReals.some(r => item.real === r || item.real.startsWith(r + '/'));
 }
 
 async function listDeleteTargets(item) {

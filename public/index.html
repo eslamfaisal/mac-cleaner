@@ -103,9 +103,25 @@
       <button class="tile tile-safety" data-safety="caution"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-caution"></span>caution</div></button>
       <button class="tile tile-safety" data-safety="risky"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-risky"></span>risky</div></button>
     </div>
+    <div class="readonly-note muted" id="readonly-note" hidden></div>
     <div class="catbar-wrap">
       <div class="catbar" id="catbar" role="img" aria-label="Cleanable space by category"></div>
       <div class="catbar-legend" id="catbar-legend"></div>
+    </div>
+  </section>
+
+  <section class="receipt" id="receipt" hidden>
+    <div class="receipt-head">
+      <span class="receipt-icon">✅</span>
+      <div>
+        <b id="receipt-title">Cleanup finished</b>
+        <div class="muted" id="receipt-detail"></div>
+      </div>
+      <button class="icon-btn" id="receipt-dismiss" title="Dismiss">✕</button>
+    </div>
+    <div class="receipt-actions">
+      <button class="btn" id="receipt-trash" hidden>Empty the Trash to actually free it</button>
+      <button class="btn" id="receipt-errors" hidden>Show what failed</button>
     </div>
   </section>
 
@@ -126,6 +142,7 @@
     </select>
     <span class="scan-meta muted" id="scan-meta"></span>
     <button class="filter-chip" id="clear-filters" hidden></button>
+    <button class="filter-chip" id="kept-chip" hidden></button>
     <div class="spacer"></div>
     <button class="btn" id="select-safe">Select all safe</button>
     <button class="btn" id="select-none">Clear selection</button>
@@ -208,6 +225,7 @@
     <h2 id="modal-title">Confirm cleanup</h2>
     <div class="modal-mode" id="modal-mode"></div>
     <div class="modal-list" id="modal-list"></div>
+    <div class="dup-warn" id="modal-dup-warn" hidden></div>
     <div class="modal-risky" id="modal-risky" hidden>
       <div class="risky-warn">⚠️ The items below can mean <b>permanent data loss</b>:</div>
       <div class="modal-list" id="modal-risky-list"></div>
