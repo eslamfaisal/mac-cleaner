@@ -5,6 +5,7 @@ const TOKEN = document.querySelector('meta[name="token"]').content;
 // ------------------------------------------------------------- state ------
 
 function viewFromHash() {
+  if (location.hash === '#settings') return { name: 'settings' };
   const m = location.hash.match(/^#g\/(.+)$/);
   return m ? { name: 'group', id: decodeURIComponent(m[1]) } : { name: 'overview' };
 }
@@ -12,6 +13,9 @@ function viewFromHash() {
 const state = {
   view: viewFromHash(),
   groups: [],
+  normalGroups: [],
+  uiMode: 'dev',             // 'normal' | 'dev' — set from server settings
+  deleteModes: { normal: 'trash', dev: 'rm' },
   items: new Map(),          // id -> item
   selection: new Set(),
   scan: { status: 'idle', tasksDone: 0, tasksTotal: 0 },
@@ -23,7 +27,6 @@ const state = {
     safety: null,            // null | 'safe' | 'caution' | 'risky'
     minBytes: 10 * 1024 * 1024,
   },
-  mode: localStorage.getItem('cleaner-mode') || 'rm',
   fdaDismissed: sessionStorage.getItem('cleaner-fda-dismissed') === '1',
   fdaJustGranted: 0,
   sort: 'size',
@@ -36,6 +39,25 @@ const markDirty = () => { dirty = true; };
 // categorical palette, fixed slot per group id (color follows entity)
 const SLOT_COLORS = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)', 'var(--c5)', 'var(--c6)', 'var(--c7)', 'var(--c8)'];
 const groupColor = new Map();
+
+// ------------------------------------------------------------- mode -------
+// One scan, two taxonomies. Everything downstream asks these two helpers
+// which categories exist and which one an item belongs to, so switching mode
+// is a re-render — never a rescan.
+
+const NORMAL_FALLBACK_GROUP = 'n-dev';
+
+function activeGroups() {
+  return state.uiMode === 'normal' ? state.normalGroups : state.groups;
+}
+
+function groupOf(item) {
+  return state.uiMode === 'normal' ? (item.normalGroup || NORMAL_FALLBACK_GROUP) : item.group;
+}
+
+function deleteMode() {
+  return state.deleteModes[state.uiMode] || 'rm';
+}
 
 // ------------------------------------------------------------- utils ------
 
@@ -58,6 +80,16 @@ function fmtAge(mtime) {
   if (days < 30) return Math.round(days) + ' d old';
   if (days < 365) return Math.round(days / 30) + ' mo old';
   return (days / 365).toFixed(1) + ' y old';
+}
+
+// "Mediaanalysisd (com.apple.mediaanalysisd) — sandbox cache" is a reasonable
+// row for a developer and gibberish for everyone else: in normal mode the
+// bundle id and the sandbox wording come off.
+function displayName(item) {
+  if (state.uiMode !== 'normal') return item.name;
+  return item.name
+    .replace(/\s*\((?:com|org|net|io|dev|app|us|ru|co|ai)\.[^)]*\)/i, '')
+    .replace(/ — (?:sandbox|group) cache$/, ' — cache');
 }
 
 function sortItems(arr) {
@@ -87,6 +119,54 @@ function toast(msg, isErr) {
   setTimeout(() => el.remove(), 5000);
 }
 
+// ---------------------------------------------------------- settings ------
+
+// uiMode === null means the user has never chosen — the picker takes over the
+// screen until they do.
+function applySettings(s) {
+  if (!s) return;
+  state.needsModeChoice = s.uiMode == null;
+  state.uiMode = s.uiMode || 'normal';   // picker is showing anyway when null
+  if (s.deleteMode) state.deleteModes = { ...state.deleteModes, ...s.deleteMode };
+  document.body.classList.toggle('mode-normal', state.uiMode === 'normal');
+  $('#mode-onboard').hidden = !state.needsModeChoice;
+  renderModeToggles();
+}
+
+function saveSettings(patch) {
+  post('/api/settings', patch).catch(e => toast('Could not save preference: ' + e.message, true));
+}
+
+function setUiMode(mode, { persist = true } = {}) {
+  if (mode !== 'normal' && mode !== 'dev') return;
+  const changed = state.uiMode !== mode;
+  state.uiMode = mode;
+  state.needsModeChoice = false;
+  document.body.classList.toggle('mode-normal', mode === 'normal');
+  $('#mode-onboard').hidden = true;
+  if (persist) saveSettings({ uiMode: mode });
+  if (changed) {
+    // the other taxonomy has different category ids — a detail deep-link into
+    // the old one is meaningless now
+    if (state.view.name === 'group' && !activeGroups().some(g => g.id === state.view.id)) {
+      history.replaceState(null, '', '#');
+      state.view = { name: 'overview' };
+    }
+    buildGroupSections();
+    buildCards();
+  }
+  renderModeToggles();
+  markDirty();
+}
+
+function setDeleteMode(mode) {
+  if (mode !== 'trash' && mode !== 'rm') return;
+  state.deleteModes[state.uiMode] = mode;
+  saveSettings({ deleteMode: { [state.uiMode]: mode } });
+  renderModeToggles();
+  markDirty();
+}
+
 // ------------------------------------------------------------- SSE --------
 
 function connect() {
@@ -97,6 +177,8 @@ function connect() {
     if (state.bootId && snap.bootId !== state.bootId) { location.reload(); return; }
     state.bootId = snap.bootId;
     state.groups = snap.groups;
+    state.normalGroups = snap.normalGroups || [];
+    applySettings(snap.settings);
     state.scan = snap.scan;
     state.disk = snap.disk;
     state.reclaimed = snap.reclaimed;
@@ -104,11 +186,15 @@ function connect() {
     state.fda = snap.fda;
     state.appMode = snap.appMode;
     $('#app-version').textContent = snap.version && snap.version !== 'dev' ? 'v' + snap.version : '';
+    $('#settings-version').textContent = snap.version ? 'v' + snap.version : '';
     state.items = new Map(snap.items.map(i => [i.id, i]));
     for (const id of [...state.selection]) if (!state.items.has(id)) state.selection.delete(id);
-    snap.groups.forEach((g, idx) => groupColor.set(g.id, SLOT_COLORS[idx % SLOT_COLORS.length]));
-    // stale deep-link (group id no longer exists) → back to overview
-    if (state.view.name === 'group' && !snap.groups.some(g => g.id === state.view.id)) {
+    // one fixed color slot per group id, in both taxonomies
+    for (const list of [snap.groups, state.normalGroups]) {
+      list.forEach((g, idx) => groupColor.set(g.id, SLOT_COLORS[idx % SLOT_COLORS.length]));
+    }
+    // stale deep-link (group id not in the active taxonomy) → back to overview
+    if (state.view.name === 'group' && !activeGroups().some(g => g.id === state.view.id)) {
       history.replaceState(null, '', '#');
       state.view = { name: 'overview' };
     }
@@ -133,6 +219,15 @@ function connect() {
     markDirty();
   });
   es.addEventListener('walk', (e) => { $('#walk-dir').textContent = 'scanning ' + JSON.parse(e.data).dir; });
+  // another window changed a preference — follow it
+  es.addEventListener('settings', (e) => {
+    const s = JSON.parse(e.data);
+    const wasMode = state.uiMode;
+    applySettings(s);
+    if (state.uiMode !== wasMode) { buildGroupSections(); buildCards(); }
+    renderModeToggles();
+    markDirty();
+  });
   es.addEventListener('disk', (e) => { state.disk = JSON.parse(e.data); markDirty(); });
   es.addEventListener('reclaimed', (e) => { state.reclaimed = JSON.parse(e.data).bytes; markDirty(); });
   es.addEventListener('fda', (e) => {
@@ -159,7 +254,7 @@ function buildGroupSections() {
   container.innerHTML = '';
   groupEls.clear();
   rowEls.clear();
-  for (const g of state.groups) {
+  for (const g of activeGroups()) {
     const section = document.createElement('div');
     section.className = 'group';
     section.hidden = true;
@@ -181,7 +276,7 @@ function buildGroupSections() {
     check.addEventListener('change', () => {
       // operate on ALL selectable items of the group (not just filtered-visible
       // ones) so the checkbox always reflects what would actually be deleted
-      const items = [...state.items.values()].filter(i => i.group === g.id && selectable(i));
+      const items = [...state.items.values()].filter(i => groupOf(i) === g.id && selectable(i));
       for (const i of items) check.checked ? state.selection.add(i.id) : state.selection.delete(i.id);
       markDirty();
     });
@@ -280,8 +375,17 @@ function render() {
   renderHeader();
   renderSummary();
   if (state.view.name === 'group') renderDetail();
+  else if (state.view.name === 'settings') renderSettings();
   else renderCards();
   renderSelectionBar();
+}
+
+function renderSettings() {
+  renderModeToggles();
+  const pill = $('#settings-fda-pill');
+  if (state.fda === false) { pill.className = 'fda-pill waiting'; pill.textContent = 'not granted'; }
+  else { pill.className = 'fda-pill granted'; pill.textContent = '✓ granted'; }
+  $('#settings-fda-target').textContent = state.appMode ? 'Mac Cleaner' : 'your terminal app (Terminal, iTerm, …)';
 }
 
 function renderHeader() {
@@ -317,13 +421,17 @@ function renderHeader() {
   }
 
   const hasItems = state.items.size > 0;
+  const settingsView = state.view.name === 'settings';
   const overview = state.view.name === 'overview';
-  $('#hero').hidden = hasItems || status === 'scanning';
+  const normal = state.uiMode === 'normal';
+  $('#hero').hidden = hasItems || status === 'scanning' || settingsView;
   $('#summary').hidden = !hasItems || !overview;
-  $('#controls').hidden = !hasItems;
-  $('#commands').hidden = !hasItems || !overview;
+  $('#controls').hidden = !hasItems || settingsView;
+  // terminal commands are developer territory — never shown in normal mode
+  $('#commands').hidden = !hasItems || !overview || normal;
   $('#cards').hidden = !hasItems || !overview;
-  $('#detail').hidden = overview;
+  $('#detail').hidden = overview || settingsView;
+  $('#settings').hidden = !settingsView;
 
   if (state.scanEndedAt && status === 'done') {
     const min = Math.round((Date.now() - state.scanEndedAt) / 60000);
@@ -370,9 +478,12 @@ function renderSummary() {
     if (['deleted', 'gone', 'missing'].includes(i.status) || i.noTotal) continue;
     totals.all += i.bytes;
     totals[i.safety] += i.bytes;
-    byGroup.set(i.group, (byGroup.get(i.group) || 0) + i.bytes);
+    const gid = groupOf(i);
+    byGroup.set(gid, (byGroup.get(gid) || 0) + i.bytes);
   }
   $('#tile-total .tile-value').textContent = fmtBytes(totals.all);
+  $('#tile-total .tile-label').textContent =
+    state.uiMode === 'normal' ? 'you can free up' : 'cleanable found';
 
   // live label: what "Select all safe" would actually grab (same exclusions),
   // plus WHY the rest of the safe total is not in it — the two numbers looking
@@ -419,7 +530,7 @@ function renderSummary() {
   const segs = [...top.map(([gid, b]) => ({ gid, b, color: groupColor.get(gid) }))];
   if (otherBytes > 0) segs.push({ gid: null, b: otherBytes, color: 'var(--c-other)' });
   for (const s of segs) {
-    const g = state.groups.find(x => x.id === s.gid);
+    const g = activeGroups().find(x => x.id === s.gid);
     const title = g ? g.title : 'Other';
     const seg = document.createElement('div');
     seg.className = 'seg';
@@ -441,15 +552,16 @@ function renderGroups() {
   const allByGroup = new Map();
   for (const i of state.items.values()) {
     if (['missing'].includes(i.status)) continue;
-    if (!allByGroup.has(i.group)) allByGroup.set(i.group, []);
-    allByGroup.get(i.group).push(i);
+    const gid = groupOf(i);
+    if (!allByGroup.has(gid)) allByGroup.set(gid, []);
+    allByGroup.get(gid).push(i);
     if (passesFilters(i)) {
-      if (!visByGroup.has(i.group)) visByGroup.set(i.group, []);
-      visByGroup.get(i.group).push(i);
+      if (!visByGroup.has(gid)) visByGroup.set(gid, []);
+      visByGroup.get(gid).push(i);
     }
   }
 
-  for (const g of state.groups) {
+  for (const g of activeGroups()) {
     const els = groupEls.get(g.id);
     if (!els) continue;
     // detail view shows exactly one group; the rest stay hidden and unrendered
@@ -490,22 +602,23 @@ function renderGroups() {
       cursor = row;
     };
 
-    if (CLUSTERED.has(g.id)) {
-      // cluster by key (project dir / duplicate set), subheader per cluster
-      const byProject = new Map();
+    const cluster = clusterRuleFor(g.id, all);
+    if (cluster) {
+      // cluster by key (project dir / duplicate set / original category)
+      const byKey = new Map();
       for (const item of vis) {
-        const key = item.project || '(other)';
-        if (!byProject.has(key)) byProject.set(key, []);
-        byProject.get(key).push(item);
+        const key = cluster.key(item);
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(item);
       }
-      const clusters = [...byProject.entries()]
-        .map(([proj, items]) => ({ proj, items, gid: g.id, total: items.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0) }))
+      const clusters = [...byKey.entries()]
+        .map(([proj, items]) => ({ proj, items, gid: g.id, rule: cluster, total: items.reduce((s, i) => ['deleted', 'gone'].includes(i.status) ? s : s + i.bytes, 0) }))
         .sort((a, b) => b.total - a.total);
       for (const c of clusters) {
         const phId = 'ph:' + g.id + ':' + c.proj;
         seen.add(phId);
         let ph = rowEls.get(phId);
-        if (!ph) { ph = buildProjectHeader(phId, c.proj, g.id); rowEls.set(phId, ph); }
+        if (!ph) { ph = buildProjectHeader(phId, c.proj, g.id, cluster); rowEls.set(phId, ph); }
         updateProjectHeader(ph, c);
         place(ph);
         for (const item of sortItems(c.items)) {
@@ -533,34 +646,64 @@ function renderGroups() {
   }
 }
 
-// groups whose rows are clustered under sub-headers, keyed by item.project
-const CLUSTERED = new Set(['projects', 'duplicates']);
+// Groups whose rows are broken into sub-headers. `key` groups the items,
+// `icon`/`noun` label the header, `aria`/`title` describe its checkbox.
+// The developer card in normal mode is the reason this is a rule and not a
+// boolean: hundreds of technical items are only browsable when split back
+// into the categories they came from.
+function clusterRuleFor(gid, items) {
+  const byProject = (i) => i.project || '(other)';
+  if (gid === 'projects') {
+    return { key: byProject, icon: () => '📁', noun: ['artifact', 'artifacts'],
+      aria: 'Select all artifacts of this project', title: 'Select group' };
+  }
+  if (gid === 'duplicates' || gid === 'n-dups') {
+    return { key: byProject, icon: () => '👯', noun: ['copy', 'copies'], skipNewest: true,
+      aria: 'Select all copies except the newest', title: 'Selects every copy except the newest' };
+  }
+  // A normal-mode category can merge several technical ones — "System Junk"
+  // alone can hold a thousand rows. Once it does, split it back into the
+  // categories the items came from, so it stays navigable.
+  if (state.uiMode === 'normal' && items.length > 12) {
+    const sources = new Set(items.map(i => i.group));
+    if (sources.size > 1) {
+      return {
+        key: (i) => (state.groups.find(g => g.id === i.group) || {}).title || 'Other',
+        icon: (name) => (state.groups.find(g => g.title === name) || {}).icon || '📂',
+        noun: ['item', 'items'], aria: 'Select everything in this category', title: 'Select category',
+      };
+    }
+  }
+  return null;
+}
 
 // duplicates: the cluster checkbox intentionally skips the newest copy, so
 // "tick the set" reclaims space while always keeping one file
-const clusterSelectable = (i) => selectable(i) && !(i.group === 'duplicates' && i.dupNewest);
+const clusterSelectable = (i, rule) => selectable(i) && !(rule?.skipNewest && i.dupNewest);
 
-function projectItems(gid, proj) {
+function clusterItems(gid, proj, rule) {
   return [...state.items.values()].filter(i =>
-    i.group === gid && (i.project || '(other)') === proj && passesFilters(i));
+    groupOf(i) === gid && rule.key(i) === proj && passesFilters(i));
 }
 
-function buildProjectHeader(phId, proj, gid) {
+function buildProjectHeader(phId, proj, gid, rule) {
   const el = document.createElement('div');
   el.className = 'prow-header';
   el.dataset.id = phId;
-  const dup = gid === 'duplicates';
   el.innerHTML = `
-    <input type="checkbox" aria-label="${dup ? 'Select all copies except the newest' : 'Select all artifacts of this project'}"
-           title="${dup ? 'Selects every copy except the newest' : 'Select group'}">
-    <span class="ph-icon">${dup ? '👯' : '📁'}</span>
+    <input type="checkbox">
+    <span class="ph-icon"></span>
     <span class="ph-name"></span>
     <span class="ph-count"></span>
     <span class="ph-size"></span>`;
+  el.querySelector('.ph-icon').textContent = rule.icon(proj);
   el.querySelector('.ph-name').textContent = proj;
-  el.querySelector('input').addEventListener('change', (e) => {
-    for (const i of projectItems(gid, proj)) {
-      if (!clusterSelectable(i)) continue;
+  const check = el.querySelector('input');
+  check.setAttribute('aria-label', rule.aria);
+  check.title = rule.title;
+  check.addEventListener('change', (e) => {
+    for (const i of clusterItems(gid, proj, rule)) {
+      if (!clusterSelectable(i, rule)) continue;
       e.target.checked ? state.selection.add(i.id) : state.selection.delete(i.id);
     }
     markDirty();
@@ -569,11 +712,11 @@ function buildProjectHeader(phId, proj, gid) {
 }
 
 function updateProjectHeader(ph, c) {
+  const [one, many] = c.rule.noun;
   ph.querySelector('.ph-size').textContent = fmtBytes(c.total);
-  ph.querySelector('.ph-count').textContent = c.gid === 'duplicates'
-    ? `${fmtCount(c.items.length)} ${c.items.length === 1 ? 'copy' : 'copies'}`
-    : `${fmtCount(c.items.length)} artifact${c.items.length === 1 ? '' : 's'}`;
-  const selectableItems = c.items.filter(clusterSelectable);
+  ph.querySelector('.ph-count').textContent =
+    `${fmtCount(c.items.length)} ${c.items.length === 1 ? one : many}`;
+  const selectableItems = c.items.filter(i => clusterSelectable(i, c.rule));
   const sel = selectableItems.filter(i => state.selection.has(i.id)).length;
   const check = ph.querySelector('input');
   check.checked = sel > 0 && sel === selectableItems.length;
@@ -616,11 +759,12 @@ function updateRow(row, item) {
   check.disabled = !selectable(item);
 
   const nameEl = row.querySelector('.r-name');
-  const badgeSig = [item.safety, item.needs || '', ...(item.badges || [])].join('|');
-  if (row.dataset.badgeSig !== badgeSig || nameEl.querySelector('.nm').textContent !== item.name) {
+  const label = displayName(item);
+  const badgeSig = [item.safety, item.needs || '', state.uiMode, ...(item.badges || [])].join('|');
+  if (row.dataset.badgeSig !== badgeSig || nameEl.querySelector('.nm').textContent !== label) {
     row.dataset.badgeSig = badgeSig;
     nameEl.innerHTML = '<span class="nm"></span>';
-    nameEl.querySelector('.nm').textContent = item.name;
+    nameEl.querySelector('.nm').textContent = label;
     const sb = document.createElement('span');
     sb.className = 'badge badge-safety-' + item.safety;
     sb.textContent = item.safety;
@@ -639,7 +783,12 @@ function updateRow(row, item) {
     }
     row.title = (item.why ? item.why : '') + (item.regen ? '\n↩ ' + item.regen : '');
   }
-  row.querySelector('.r-path').textContent = item.display + (item.mtime ? '  ·  ' + fmtAge(item.mtime) : '');
+  // Normal mode answers "what is this?" on the second line; the path is a
+  // developer's question and stays in the tooltip and the Reveal button.
+  const age = item.mtime ? '  ·  ' + fmtAge(item.mtime) : '';
+  row.querySelector('.r-path').textContent = state.uiMode === 'normal'
+    ? (item.why || item.display) + age
+    : item.display + age;
 
   const statusEl = row.querySelector('.r-status');
   if (item.status === 'scanning') statusEl.innerHTML = '<span class="spinner"></span>';
@@ -683,9 +832,9 @@ function buildCards() {
   const wrap = $('#cards');
   wrap.innerHTML = '';
   cardEls.clear();
-  for (const g of state.groups) {
+  for (const g of activeGroups()) {
     const el = document.createElement('button');
-    el.className = 'card';
+    el.className = 'card' + (g.id === 'n-dev' ? ' card-advanced' : '');
     el.setAttribute('aria-label', 'Open ' + g.title);
     el.style.setProperty('--card-accent', groupColor.get(g.id) || 'var(--c-other)');
     el.innerHTML = `
@@ -695,11 +844,14 @@ function buildCards() {
         <span class="card-chevron">›</span>
       </div>
       <div class="card-size">—</div>
+      <div class="card-desc"></div>
       <div class="card-meta"></div>
       <div class="card-bar">
         <div class="cb-safe"></div><div class="cb-caution"></div><div class="cb-risky"></div>
       </div>`;
     el.addEventListener('click', () => { if (!el.classList.contains('card-empty')) openGroup(g.id); });
+    // description only exists in the normal taxonomy; CSS hides it in dev mode
+    el.querySelector('.card-desc').textContent = g.desc || '';
     wrap.appendChild(el);
     cardEls.set(g.id, {
       el,
@@ -718,7 +870,8 @@ function renderCards() {
   const stats = new Map();
   for (const i of state.items.values()) {
     if (['deleted', 'gone', 'missing'].includes(i.status)) continue;
-    const s = stats.get(i.group)
+    const gid = groupOf(i);
+    const s = stats.get(gid)
       || { n: 0, b: 0, safe: 0, caution: 0, risky: 0, ro: 0, denied: 0, scanning: 0, match: false };
     s.n++;
     if (!i.noTotal) { s.b += i.bytes; s[i.safety] += i.bytes; }
@@ -730,10 +883,10 @@ function renderCards() {
       const q = state.filters.q.toLowerCase();
       if (i.name.toLowerCase().includes(q) || i.display.toLowerCase().includes(q)) s.match = true;
     }
-    stats.set(i.group, s);
+    stats.set(gid, s);
   }
   const q = state.filters.q.toLowerCase();
-  for (const g of state.groups) {
+  for (const g of activeGroups()) {
     const c = cardEls.get(g.id);
     if (!c) continue;
     const s = stats.get(g.id);
@@ -766,27 +919,43 @@ function renderCards() {
 // ------------------------------------------------------------- detail -----
 
 function renderDetail() {
-  const g = state.groups.find(x => x.id === state.view.id);
-  if (!g) return;
+  const g = activeGroups().find(x => x.id === state.view.id);
+  // a link into the other mode's taxonomy (bookmark, back button, mode switch)
+  // — showing the previous group instead would be a lie about what is listed
+  if (!g) { closeGroup(); return; }
+  $('#detail-title').textContent = `${g.icon} ${g.title}`;
+  $('#detail-desc').textContent = g.desc || '';
   renderGroups();
 }
 
 function openGroup(id) { location.hash = '#g/' + encodeURIComponent(id); }
 function closeGroup() { location.hash = ''; }
 
+let transitioning = false;
+
 function applyViewSwap(next) {
   const swap = () => {
     state.view = next;
-    if (next.name === 'group') window.scrollTo({ top: 0 });
+    if (next.name !== 'overview') window.scrollTo({ top: 0 });
     render();
-    const shown = $(next.name === 'group' ? '#detail' : '#cards');
+    const shown = $(next.name === 'group' ? '#detail' : next.name === 'settings' ? '#settings' : '#cards');
     shown.classList.remove('view-enter');
     void shown.offsetWidth;            // restart the enter animation
     shown.classList.add('view-enter');
   };
+  // A transition started while another is running is aborted — and an aborted
+  // transition may never run its callback, which would leave the old view on
+  // screen with handlers that no longer match the current mode. Correctness
+  // first: only animate when nothing else is animating.
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (!reduced && document.startViewTransition) document.startViewTransition(swap);
-  else swap();
+  if (!reduced && !transitioning && document.startViewTransition) {
+    transitioning = true;
+    const t = document.startViewTransition(swap);
+    // all three settle independently and all three reject on an abort
+    t.ready.catch(() => {});
+    t.updateCallbackDone.catch(() => {});
+    t.finished.catch(() => {}).finally(() => { transitioning = false; });
+  } else swap();
 }
 
 window.addEventListener('hashchange', () => applyViewSwap(viewFromHash()));
@@ -804,10 +973,10 @@ function openModal(ids) {
   const total = items.reduce((s, i) => s + i.bytes, 0);
 
   const permanentOnly = items.filter(i => i.permanentOnly);
-  let modeText = state.mode === 'trash'
+  let modeText = deleteMode() === 'trash'
     ? 'Items will be moved to Trash (restorable until you empty it).'
     : 'Items will be deleted permanently — this cannot be undone.';
-  if (state.mode === 'trash' && permanentOnly.length) {
+  if (deleteMode() === 'trash' && permanentOnly.length) {
     modeText += ` ⚠️ ${permanentOnly.map(i => i.name).join(', ')}: always deleted permanently — cannot be restored.`;
   }
   $('#modal-mode').textContent = modeText;
@@ -818,7 +987,8 @@ function openModal(ids) {
       const r = document.createElement('div');
       r.className = 'm-row';
       r.innerHTML = `<span class="dot dot-${i.safety}"></span><span class="m-name"></span><span class="m-size"></span>`;
-      r.querySelector('.m-name').textContent = i.name + '  ·  ' + i.display;
+      r.querySelector('.m-name').textContent = state.uiMode === 'normal'
+        ? displayName(i) : i.name + '  ·  ' + i.display;
       r.querySelector('.m-size').textContent = fmtBytes(i.bytes);
       el.appendChild(r);
     }
@@ -841,7 +1011,7 @@ function openModal(ids) {
 function updateModalConfirm() {
   const risky = modalIds.some(id => state.items.get(id)?.safety === 'risky');
   $('#modal-confirm').disabled = risky && !$('#risky-ack').checked;
-  $('#modal-confirm').textContent = state.mode === 'trash' ? 'Move to Trash' : 'Delete permanently';
+  $('#modal-confirm').textContent = deleteMode() === 'trash' ? 'Move to Trash' : 'Delete permanently';
 }
 
 $('#risky-ack').addEventListener('change', updateModalConfirm);
@@ -853,7 +1023,7 @@ $('#modal-confirm').addEventListener('click', async () => {
   modalIds = modalIds.filter(id => { const i = state.items.get(id); return i && selectable(i); });
   if (!modalIds.length) { toast('Nothing left to clean — items changed while confirming.'); return; }
   try {
-    const r = await post('/api/delete', { ids: modalIds, mode: state.mode });
+    const r = await post('/api/delete', { ids: modalIds, mode: deleteMode() });
     toast(`Cleaning ${r.accepted.length} item${r.accepted.length === 1 ? '' : 's'}…`);
     for (const id of modalIds) state.selection.delete(id);
     markDirty();
@@ -889,7 +1059,7 @@ $('#detail-back').addEventListener('click', closeGroup);
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#modal').hidden) { $('#modal').hidden = true; return; }
-  if (e.key === 'Escape' && state.view.name === 'group'
+  if (e.key === 'Escape' && ['group', 'settings'].includes(state.view.name)
       && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) { closeGroup(); return; }
   if (e.key === '/' && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
     e.preventDefault();
@@ -918,18 +1088,40 @@ $('#select-none').addEventListener('click', () => { state.selection.clear(); mar
 $('#sel-clear').addEventListener('click', () => { state.selection.clear(); markDirty(); });
 $('#sel-clean').addEventListener('click', () => openModal([...state.selection]));
 
-const modeToggle = $('#mode-toggle');
-function renderMode() {
-  for (const b of modeToggle.querySelectorAll('button')) {
-    b.setAttribute('aria-checked', String(b.dataset.mode === state.mode));
+// ------------------------------------------------------- mode controls ----
+
+function renderModeToggles() {
+  for (const b of $('#mode-toggle').querySelectorAll('button')) {
+    b.setAttribute('aria-checked', String(b.dataset.mode === deleteMode()));
+  }
+  for (const b of $('#ui-mode-toggle').querySelectorAll('button')) {
+    b.setAttribute('aria-checked', String(b.dataset.uimode === state.uiMode));
+  }
+  for (const c of document.querySelectorAll('#settings .mode-card')) {
+    c.classList.toggle('current', c.dataset.uimode === state.uiMode);
+  }
+  for (const r of document.querySelectorAll('#settings input[name="delete-mode"]')) {
+    r.checked = r.value === deleteMode();
   }
 }
-modeToggle.addEventListener('click', (e) => {
+
+$('#mode-toggle').addEventListener('click', (e) => {
   const b = e.target.closest('button');
-  if (!b) return;
-  state.mode = b.dataset.mode;
-  localStorage.setItem('cleaner-mode', state.mode);
-  renderMode();
+  if (b) setDeleteMode(b.dataset.mode);
 });
-renderMode();
+$('#ui-mode-toggle').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (b) setUiMode(b.dataset.uimode);
+});
+$('#open-settings').addEventListener('click', () => { location.hash = '#settings'; });
+$('#settings-back').addEventListener('click', () => { location.hash = ''; });
+for (const card of document.querySelectorAll('.mode-card')) {
+  card.addEventListener('click', () => setUiMode(card.dataset.uimode));
+}
+for (const r of document.querySelectorAll('#settings input[name="delete-mode"]')) {
+  r.addEventListener('change', () => { if (r.checked) setDeleteMode(r.value); });
+}
+$('#settings-fda-open').addEventListener('click', () => post('/api/settings/fda').catch(e => toast(e.message, true)));
+
+renderModeToggles();
 connect();

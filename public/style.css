@@ -285,8 +285,62 @@ button.tile:hover { background: var(--surface-2); }
 .card-dim { opacity: .3; }
 .card-match { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
 
+.card-desc { display: none; font-size: 12px; color: var(--ink-2); line-height: 1.4; }
+
 /* ---------- detail (drill-down) ---------- */
 .detail-header { display: flex; align-items: center; gap: 12px; margin: 16px 0 10px; }
+.detail-heading { min-width: 0; display: flex; flex-direction: column; }
+.detail-heading b { font-size: 15px; }
+.detail-heading .muted { font-size: 12px; }
+
+/* ---------- mode: normal (non-developer presentation) ---------- */
+.hero-normal { display: none; }
+body.mode-normal .hero-dev { display: none; }
+body.mode-normal .hero-normal { display: block; }
+body.mode-normal .delete-toggle { display: none; }       /* lives in Settings instead */
+body.mode-normal .cards { grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 14px; }
+body.mode-normal .card { padding: 16px 18px; gap: 9px; }
+body.mode-normal .card-icon { font-size: 22px; }
+body.mode-normal .card-size { font-size: 24px; }
+body.mode-normal .card-desc { display: block; }
+/* the collapsed developer card is deliberately quieter than the rest */
+body.mode-normal .card-advanced { grid-column: 1 / -1; opacity: .82; }
+body.mode-normal .card-advanced .card-size { font-size: 20px; }
+
+/* ---------- first-run mode picker ---------- */
+.mode-onboard {
+  position: fixed; inset: 0; z-index: 60; overflow: auto;
+  background: var(--page); display: flex; align-items: center; justify-content: center; padding: 32px 20px;
+}
+.onboard-inner { max-width: 880px; text-align: center; }
+.onboard-inner h1 { font-size: 26px; margin: 0 0 6px; }
+.onboard-foot { margin-top: 22px; font-size: 12px; }
+.mode-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 22px; text-align: left; }
+.mode-card {
+  display: flex; flex-direction: column; gap: 7px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px;
+  transition: transform .15s ease, border-color .15s ease, background .15s ease;
+}
+.mode-card:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--surface-2); }
+.mode-card .mc-icon { font-size: 26px; }
+.mode-card b { font-size: 17px; }
+.mode-card p { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+.mode-card .mc-pick { margin-top: 4px; font-size: 11.5px; color: var(--ink-3); }
+.mode-card.current { border-color: var(--accent); background: var(--surface-2); }
+
+/* ---------- settings page ---------- */
+#settings { max-width: 860px; }
+.set-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px 18px; margin-bottom: 12px;
+}
+.set-card h2 { font-size: 15px; margin: 0 0 4px; }
+.set-card p { margin: 4px 0; font-size: 12.5px; }
+.set-card .mode-cards { margin-top: 12px; }
+.set-radio { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; cursor: pointer; font-size: 13px; }
+.set-radio input { accent-color: var(--accent); margin-top: 2px; }
+.set-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+.set-foot { font-size: 11.5px; }
 
 .view-enter { animation: viewfade .18s ease-out; }
 @keyframes viewfade { from { opacity: 0; transform: translateY(6px); } }

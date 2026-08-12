@@ -15,7 +15,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { Scanner, GROUPS, HOME } from './lib/scanner.js';
+import { Scanner, GROUPS, NORMAL_GROUPS, HOME } from './lib/scanner.js';
 import { SUGGESTED_COMMANDS } from './lib/categories.js';
 
 // PORT=0 asks the OS for an ephemeral port (used by the .app wrapper, which
@@ -32,6 +32,50 @@ try { APP_VERSION = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim(); 
 const scanner = new Scanner();
 let reclaimedBytes = 0;
 let disk = null;
+
+// ---------------------------------------------------------- preferences ----
+// Persisted server-side, not in localStorage: the .app wrapper starts the
+// server on an ephemeral port, so the page origin (and with it localStorage)
+// changes on every launch.
+//   uiMode: null  → first run, the UI shows the mode picker
+const SETTINGS_DIR = path.join(HOME, 'Library/Application Support/Mac Cleaner');
+const SETTINGS_PATH = path.join(SETTINGS_DIR, 'settings.json');
+const DEFAULT_SETTINGS = { uiMode: null, deleteMode: { normal: 'trash', dev: 'rm' } };
+
+function loadSettings() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    return {
+      uiMode: raw.uiMode === 'normal' || raw.uiMode === 'dev' ? raw.uiMode : null,
+      deleteMode: {
+        normal: raw.deleteMode?.normal === 'rm' ? 'rm' : 'trash',
+        dev: raw.deleteMode?.dev === 'trash' ? 'trash' : 'rm',
+      },
+    };
+  } catch { return structuredClone(DEFAULT_SETTINGS); }
+}
+
+let settings = loadSettings();
+
+async function saveSettings(patch) {
+  if (patch.uiMode === 'normal' || patch.uiMode === 'dev') settings.uiMode = patch.uiMode;
+  if (patch.deleteMode && typeof patch.deleteMode === 'object') {
+    for (const m of ['normal', 'dev']) {
+      const v = patch.deleteMode[m];
+      if (v === 'trash' || v === 'rm') settings.deleteMode[m] = v;
+    }
+  }
+  try {
+    await fsp.mkdir(SETTINGS_DIR, { recursive: true });
+    await fsp.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+  } catch (e) {
+    // a read-only home is not worth failing the request over — the choice
+    // still applies to this session
+    console.error('could not save settings:', e.message);
+  }
+  broadcast('settings', settings);
+  return settings;
+}
 
 // ------------------------------------------------------------- SSE hub ----
 
@@ -76,7 +120,7 @@ scanner.on('done', () => { dirtyFlags.scan = true; refreshDisk(); });
 
 function publicItem(i) {
   return {
-    id: i.id, group: i.group, name: i.name, display: i.display, safety: i.safety,
+    id: i.id, group: i.group, normalGroup: i.normalGroup, name: i.name, display: i.display, safety: i.safety,
     why: i.why, regen: i.regen, kind: i.kind, deleteMode: i.deleteMode,
     permanentOnly: i.permanentOnly, displayOnly: i.displayOnly, needs: i.needs || null, badges: i.badges,
     status: i.status, bytes: i.bytes, files: i.files, denied: i.denied,
@@ -91,6 +135,7 @@ function publicItem(i) {
 function snapshot() {
   return {
     groups: GROUPS,
+    normalGroups: NORMAL_GROUPS,
     items: [...scanner.items.values()].map(publicItem),
     scan: scanner.state(),
     disk,
@@ -101,6 +146,7 @@ function snapshot() {
     fda: fdaGranted(),
     appMode: !!process.env.APP_MODE,
     version: APP_VERSION,
+    settings,
   };
 }
 
@@ -155,8 +201,32 @@ const BANNED_EXACT = new Set([
   path.join(HOME, 'Library'), path.join(HOME, 'Library/Application Support'),
   path.join(HOME, 'Library/Caches'), path.join(HOME, 'Library/Developer'),
   path.join(HOME, 'Library/Keychains'), path.join(HOME, 'Library/Preferences'),
+  path.join(HOME, 'Library/Messages'), path.join(HOME, 'Library/Mail'),
 ]);
 const ALLOWED_ROOTS = [HOME + '/', '/Library/Caches/', '/Library/Logs/', '/Applications/'];
+
+// Trees whose contents are cloud-backed or authentication state: deleting a
+// file here does not just free space locally.
+//   Mobile Documents / CloudStorage — rm propagates the delete to iCloud,
+//     OneDrive, Drive … for every device
+//   Keychains / Preferences / Cookies / HTTPStorages / WebKit — credentials
+//     and site logins
+//   Mail V* — the actual message store (the attachment *copies* we do offer
+//     live under Mail Downloads, which is outside these)
+const BANNED_PREFIXES = [
+  path.join(HOME, 'Library/Mobile Documents') + '/',
+  path.join(HOME, 'Library/CloudStorage') + '/',
+  path.join(HOME, 'Library/Keychains') + '/',
+  path.join(HOME, 'Library/Preferences') + '/',
+  path.join(HOME, 'Library/Cookies') + '/',
+  path.join(HOME, 'Library/HTTPStorages') + '/',
+  path.join(HOME, 'Library/WebKit') + '/',
+  path.join(HOME, 'Library/Mail/V') ,
+  path.join(HOME, 'Library/Group Containers/UBF8T346G9.Office/Outlook') + '/',
+];
+
+// Per-volume Trash: "/Volumes/<name>/.Trashes/<uid>" and anything inside it.
+const VOLUME_TRASH_RE = /^\/Volumes\/[^/]+\/\.Trashes\/\d+(\/|$)/;
 
 function validateDeletablePath(p) {
   // Throws with a reason when the path must not be deleted.
@@ -164,6 +234,9 @@ function validateDeletablePath(p) {
   const norm = path.normalize(p);
   if (norm.includes('..')) throw new Error('invalid path');
   if (BANNED_EXACT.has(norm)) throw new Error('protected path');
+  for (const b of BANNED_PREFIXES) if (norm.startsWith(b)) throw new Error('protected path');
+  // trash on another mounted disk — the only path outside the allowed roots
+  if (VOLUME_TRASH_RE.test(norm)) return norm;
   if (!ALLOWED_ROOTS.some(r => norm.startsWith(r))) throw new Error('outside allowed roots');
   if (norm.startsWith('/Applications/')) {
     // only whole .app bundles directly inside /Applications, nothing else
@@ -418,6 +491,9 @@ const server = http.createServer(async (req, res) => {
         refreshDisk();
         broadcast('fda', { granted: fdaGranted() });
         json(res, 200, { ok: true });
+        return;
+      case '/api/settings':
+        json(res, 200, { ok: true, settings: await saveSettings(body || {}) });
         return;
       case '/api/settings/fda':
         // deep-link to System Settings → Privacy & Security → Full Disk Access
