@@ -21,12 +21,43 @@
   </div>
   <div class="reclaimed" id="reclaimed" title="Space freed this session">♻️ 0 B</div>
   <button class="icon-btn fda-lock" id="fda-lock" hidden title="Full Disk Access not granted — click for setup steps">🔒</button>
-  <div class="mode-toggle" id="mode-toggle" role="radiogroup" aria-label="Delete mode">
+  <div class="mode-toggle" id="ui-mode-toggle" role="radiogroup" aria-label="Who is using the app">
+    <button data-uimode="normal" aria-checked="false" title="Friendly categories, safe defaults">Normal</button>
+    <button data-uimode="dev" aria-checked="false" title="Every technical category, permanent delete by default">Developer</button>
+  </div>
+  <div class="mode-toggle delete-toggle" id="mode-toggle" role="radiogroup" aria-label="Delete mode">
     <button data-mode="trash" aria-checked="false">Move to Trash</button>
     <button data-mode="rm" aria-checked="true">Delete permanently</button>
   </div>
+  <button class="icon-btn" id="open-settings" title="Settings">⚙️</button>
   <button class="btn btn-primary" id="scan-btn">Start Scan</button>
 </header>
+
+<div class="mode-onboard" id="mode-onboard" hidden>
+  <div class="onboard-inner">
+    <h1>How will you use Mac Cleaner?</h1>
+    <p class="muted">This only changes how results are presented. You can switch at any time.</p>
+    <div class="mode-cards">
+      <button class="mode-card" data-uimode="normal">
+        <span class="mc-icon">🏠</span>
+        <b>Normal user</b>
+        <p>Free up space the easy way. Plain-language categories — System Junk, Large &amp; Old Files,
+           Duplicates, Unused Apps, Mail &amp; Message attachments, iPhone backups. Everything technical
+           is tucked into one place. Cleaned files go to the Trash, so you can undo.</p>
+        <span class="mc-pick">Recommended for most people</span>
+      </button>
+      <button class="mode-card" data-uimode="dev">
+        <span class="mc-icon">🛠️</span>
+        <b>Developer</b>
+        <p>Show everything, split by toolchain — Xcode, Android &amp; Gradle, npm, Python, Docker, IDEs,
+           project build artifacts, game engines, plus suggested terminal commands.
+           Deletes permanently by default.</p>
+        <span class="mc-pick">You live in a terminal</span>
+      </button>
+    </div>
+    <p class="muted onboard-foot">Nothing is ever deleted without you selecting it and confirming.</p>
+  </div>
+</div>
 
 <div class="progress-row" id="progress-row" hidden>
   <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
@@ -37,27 +68,35 @@
   <div class="onboard-head">
     <span class="onboard-icon">🔐</span>
     <div class="onboard-title">
-      <b>Unlock full scanning with Full Disk Access</b>
-      <div class="muted">Safari cache, Mail, device backups and parts of System Data are invisible without it.
-      macOS cannot prompt for this permission — it takes three quick steps:</div>
+      <b>Let Mac Cleaner see the rest of your disk</b>
+      <div class="muted" id="fda-why">Without this, Mail, Messages, your Photos library, iPhone backups and Safari
+      are invisible — they scan as 0 B. macOS never asks for this permission on its own; you turn it on,
+      it applies when the app restarts.</div>
     </div>
     <button class="icon-btn" id="fda-dismiss" title="Dismiss">✕</button>
   </div>
   <ol class="onboard-steps">
     <li><button class="btn" id="fda-open">Open Full Disk Access settings</button></li>
-    <li>Turn on <b id="fda-target">your terminal app</b> in the list (add it with “+” if missing)</li>
-    <li>Watch this flip: <span class="fda-pill waiting" id="fda-pill"><span class="spinner"></span> waiting for permission…</span>
-        <span class="muted" id="fda-hint">If it stays orange after enabling, quit &amp; relaunch, then rescan.</span></li>
+    <li>Switch on <b id="fda-target">your terminal app</b> in the list (add it with “+” if it is missing)</li>
+    <li>Come back here: <span class="fda-pill waiting" id="fda-pill"><span class="spinner"></span> waiting for permission…</span></li>
+    <li id="fda-step-relaunch">
+      <button class="btn btn-primary" id="fda-relaunch" hidden>Quit &amp; Reopen Mac Cleaner</button>
+      <span class="muted" id="fda-hint">macOS only applies the permission when the app starts again.</span>
+    </li>
   </ol>
 </div>
 
 <main>
   <section class="hero" id="hero">
     <h1>Find what is eating your disk</h1>
-    <p>Scans apps you stopped using, old versions still on disk, leftovers from uninstalled apps,
+    <p class="hero-dev">Scans apps you stopped using, old versions still on disk, leftovers from uninstalled apps,
        developer caches (Xcode, Gradle, Flutter, npm, Unity, Docker, …), creative caches
        (Premiere, Resolve, Lightroom, Logic), duplicates, large files and installers.
        Everything is classified — nothing is deleted unless you say so.</p>
+    <p class="hero-normal">One scan shows exactly where your space went: junk your apps rebuild by themselves,
+       old iPhone backups, forgotten downloads, duplicate files, apps you stopped opening, mail and
+       message attachments, and the biggest files on your Mac.
+       Every item is explained, and nothing is removed until you select it and confirm.</p>
     <button class="btn btn-primary btn-lg" id="hero-scan">Start Scan</button>
   </section>
 
@@ -68,9 +107,25 @@
       <button class="tile tile-safety" data-safety="caution"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-caution"></span>caution</div></button>
       <button class="tile tile-safety" data-safety="risky"><div class="tile-value">0 B</div><div class="tile-label"><span class="dot dot-risky"></span>risky</div></button>
     </div>
+    <div class="readonly-note muted" id="readonly-note" hidden></div>
     <div class="catbar-wrap">
       <div class="catbar" id="catbar" role="img" aria-label="Cleanable space by category"></div>
       <div class="catbar-legend" id="catbar-legend"></div>
+    </div>
+  </section>
+
+  <section class="receipt" id="receipt" hidden>
+    <div class="receipt-head">
+      <span class="receipt-icon">✅</span>
+      <div>
+        <b id="receipt-title">Cleanup finished</b>
+        <div class="muted" id="receipt-detail"></div>
+      </div>
+      <button class="icon-btn" id="receipt-dismiss" title="Dismiss">✕</button>
+    </div>
+    <div class="receipt-actions">
+      <button class="btn" id="receipt-trash" hidden>Empty the Trash to actually free it</button>
+      <button class="btn" id="receipt-errors" hidden>Show what failed</button>
     </div>
   </section>
 
@@ -91,6 +146,7 @@
     </select>
     <span class="scan-meta muted" id="scan-meta"></span>
     <button class="filter-chip" id="clear-filters" hidden></button>
+    <button class="filter-chip" id="kept-chip" hidden></button>
     <div class="spacer"></div>
     <button class="btn" id="select-safe">Select all safe</button>
     <button class="btn" id="select-none">Clear selection</button>
@@ -101,8 +157,58 @@
   <section id="detail" hidden>
     <div class="detail-header">
       <button class="btn" id="detail-back">← All categories</button>
+      <div class="detail-heading">
+        <b id="detail-title"></b>
+        <span class="muted" id="detail-desc"></span>
+      </div>
     </div>
     <div id="groups"></div>
+  </section>
+
+  <section id="settings" hidden>
+    <div class="detail-header">
+      <button class="btn" id="settings-back">← Back</button>
+      <div class="detail-heading"><b>⚙️ Settings</b></div>
+    </div>
+
+    <div class="set-card">
+      <h2>Mode</h2>
+      <p class="muted">Changes how results are grouped and worded. The scan itself is the same.</p>
+      <div class="mode-cards">
+        <button class="mode-card" data-uimode="normal">
+          <span class="mc-icon">🏠</span>
+          <b>Normal user</b>
+          <p>Plain-language categories, safe defaults, technical items collapsed into one card.</p>
+        </button>
+        <button class="mode-card" data-uimode="dev">
+          <span class="mc-icon">🛠️</span>
+          <b>Developer</b>
+          <p>Every toolchain as its own category, plus suggested terminal commands.</p>
+        </button>
+      </div>
+    </div>
+
+    <div class="set-card">
+      <h2>When cleaning</h2>
+      <p class="muted">Applies to the mode you are in right now.</p>
+      <label class="set-radio"><input type="radio" name="delete-mode" value="trash">
+        <span><b>Move to Trash</b> — recoverable until you empty the Trash.</span></label>
+      <label class="set-radio"><input type="radio" name="delete-mode" value="rm">
+        <span><b>Delete permanently</b> — frees the space at once, cannot be undone.</span></label>
+      <p class="muted">Emptying the Trash itself is always permanent, whichever option you pick.</p>
+    </div>
+
+    <div class="set-card">
+      <h2>Full Disk Access</h2>
+      <p class="muted">Without it, Mail, Messages, Safari and device backups scan as empty.</p>
+      <div class="set-row">
+        <span class="fda-pill" id="settings-fda-pill">checking…</span>
+        <button class="btn" id="settings-fda-open">Open Full Disk Access settings</button>
+      </div>
+      <p class="muted">Turn on <b id="settings-fda-target">your terminal app</b> in the list, then rescan.</p>
+    </div>
+
+    <p class="muted set-foot">Mac Cleaner <span id="settings-version"></span></p>
   </section>
 
   <section class="commands" id="commands" hidden>
@@ -123,6 +229,7 @@
     <h2 id="modal-title">Confirm cleanup</h2>
     <div class="modal-mode" id="modal-mode"></div>
     <div class="modal-list" id="modal-list"></div>
+    <div class="dup-warn" id="modal-dup-warn" hidden></div>
     <div class="modal-risky" id="modal-risky" hidden>
       <div class="risky-warn">⚠️ The items below can mean <b>permanent data loss</b>:</div>
       <div class="modal-list" id="modal-risky-list"></div>
@@ -137,6 +244,12 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
+
+<div class="thumb-preview" id="thumb-preview" hidden>
+  <img alt="Preview">
+  <div class="tp-name"></div>
+  <div class="tp-path"></div>
+</div>
 
 <script src="/app.js"></script>
 </body>

@@ -12,7 +12,7 @@
 import Cocoa
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     var webView: WKWebView!
     var server: Process?
@@ -118,6 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.setFrameAutosaveName("MacCleanerMain")
 
         let conf = WKWebViewConfiguration()
+        // Full Disk Access is inherited by a process only at launch, so the UI
+        // needs a real "Quit & Reopen" button — telling a non-technical user to
+        // quit and reopen the app by hand is where the permission flow died.
+        conf.userContentController.add(self, name: "relaunch")
         webView = WKWebView(frame: frame, configuration: conf)
         webView.autoresizingMask = [.width, .height]
         // match the dashboard's dark page color while the first paint loads
@@ -132,6 +136,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func load(port: Int) {
         webView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
+    }
+
+    // Launch a fresh copy, then exit this one. The new process starts with
+    // whatever Full Disk Access the user just granted.
+    func userContentController(_ controller: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard message.name == "relaunch" else { return }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-n", Bundle.main.bundlePath]
+        try? task.run()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

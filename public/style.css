@@ -174,7 +174,7 @@ button.tile:hover { background: var(--surface-2); }
 
 .row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 110px 90px 70px;
+  grid-template-columns: 28px minmax(0, 1fr) 110px 90px 96px;
   gap: 8px; align-items: center;
   padding: 7px 14px; border-top: 1px solid var(--grid);
 }
@@ -234,7 +234,10 @@ button.tile:hover { background: var(--surface-2); }
 
 /* ---------- narrow layout ---------- */
 @media (max-width: 760px) {
-  .row { grid-template-columns: 24px minmax(0, 1fr) 90px 52px; }
+  /* three icon buttons need ~79px of min-content; the old 52px cell let the
+     Keep button spill over the size text, so a tap meant to read the size hid
+     the row from every future scan instead */
+  .row { grid-template-columns: 24px minmax(0, 1fr) 78px 86px; }
   .row .r-status, .group-header .g-hidden, .group-header .g-safety { display: none; }
   .group-header .g-size { margin-left: auto; }
   .topbar { flex-wrap: wrap; row-gap: 8px; }
@@ -285,8 +288,62 @@ button.tile:hover { background: var(--surface-2); }
 .card-dim { opacity: .3; }
 .card-match { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
 
+.card-desc { display: none; font-size: 12px; color: var(--ink-2); line-height: 1.4; }
+
 /* ---------- detail (drill-down) ---------- */
 .detail-header { display: flex; align-items: center; gap: 12px; margin: 16px 0 10px; }
+.detail-heading { min-width: 0; display: flex; flex-direction: column; }
+.detail-heading b { font-size: 15px; }
+.detail-heading .muted { font-size: 12px; }
+
+/* ---------- mode: normal (non-developer presentation) ---------- */
+.hero-normal { display: none; }
+body.mode-normal .hero-dev { display: none; }
+body.mode-normal .hero-normal { display: block; }
+body.mode-normal .delete-toggle { display: none; }       /* lives in Settings instead */
+body.mode-normal .cards { grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 14px; }
+body.mode-normal .card { padding: 16px 18px; gap: 9px; }
+body.mode-normal .card-icon { font-size: 22px; }
+body.mode-normal .card-size { font-size: 24px; }
+body.mode-normal .card-desc { display: block; }
+/* the collapsed developer card is deliberately quieter than the rest */
+body.mode-normal .card-advanced { grid-column: 1 / -1; opacity: .82; }
+body.mode-normal .card-advanced .card-size { font-size: 20px; }
+
+/* ---------- first-run mode picker ---------- */
+.mode-onboard {
+  position: fixed; inset: 0; z-index: 60; overflow: auto;
+  background: var(--page); display: flex; align-items: center; justify-content: center; padding: 32px 20px;
+}
+.onboard-inner { max-width: 880px; text-align: center; }
+.onboard-inner h1 { font-size: 26px; margin: 0 0 6px; }
+.onboard-foot { margin-top: 22px; font-size: 12px; }
+.mode-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 22px; text-align: left; }
+.mode-card {
+  display: flex; flex-direction: column; gap: 7px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px;
+  transition: transform .15s ease, border-color .15s ease, background .15s ease;
+}
+.mode-card:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--surface-2); }
+.mode-card .mc-icon { font-size: 26px; }
+.mode-card b { font-size: 17px; }
+.mode-card p { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+.mode-card .mc-pick { margin-top: 4px; font-size: 11.5px; color: var(--ink-3); }
+.mode-card.current { border-color: var(--accent); background: var(--surface-2); }
+
+/* ---------- settings page ---------- */
+#settings { max-width: 860px; }
+.set-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px 18px; margin-bottom: 12px;
+}
+.set-card h2 { font-size: 15px; margin: 0 0 4px; }
+.set-card p { margin: 4px 0; font-size: 12.5px; }
+.set-card .mode-cards { margin-top: 12px; }
+.set-radio { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; cursor: pointer; font-size: 13px; }
+.set-radio input { accent-color: var(--accent); margin-top: 2px; }
+.set-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+.set-foot { font-size: 11.5px; }
 
 .view-enter { animation: viewfade .18s ease-out; }
 @keyframes viewfade { from { opacity: 0; transform: translateY(6px); } }
@@ -356,3 +413,76 @@ button.tile:hover { background: var(--surface-2); }
 }
 .toast.err { border-color: color-mix(in srgb, var(--risky) 50%, transparent); }
 @keyframes slidein { from { transform: translateY(8px); opacity: 0; } }
+
+/* ---------- honest totals, receipts, kept items ---------- */
+/* Space that exists but is not the user's to click away. Stated next to the
+   headline instead of hidden inside it. */
+.readonly-note { font-size: 12.5px; margin-top: 10px; line-height: 1.5; }
+
+/* What a row can still do when it cannot be deleted — visible text, because a
+   tooltip is unreachable on touch and invisible at a glance. */
+.r-note {
+  font-size: 12px; color: var(--ink-3);
+  white-space: normal; margin-top: 3px; max-width: 70ch;
+}
+
+/* The item's real location: always visible, monospace so the folder structure
+   reads at a glance, and clickable — one click opens the folder in Finder with
+   the file selected. */
+.r-loc {
+  font-size: 11.5px; color: var(--ink-3);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;   /* long paths keep their TAIL visible — the file name matters most */
+  cursor: pointer; margin-top: 2px; max-width: 100%;
+}
+.r-loc:hover { color: var(--accent); text-decoration: underline; }
+
+.modal-list .m-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.modal-list .m-path {
+  font-size: 11px; color: var(--ink-3);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
+}
+
+.modal-list .m-badges { display: flex; gap: 4px; flex: 0 0 auto; }
+.dup-warn {
+  margin-top: 10px; font-size: 12.5px; color: var(--caution);
+  border: 1px solid color-mix(in srgb, var(--caution) 40%, transparent);
+  border-radius: 8px; padding: 8px 10px;
+}
+
+.receipt {
+  margin: 0 20px 16px; border: 1px solid color-mix(in srgb, var(--safe) 45%, transparent);
+  border-radius: 12px; background: color-mix(in srgb, var(--safe) 8%, var(--surface));
+  padding: 12px 14px;
+}
+.receipt-head { display: flex; gap: 10px; align-items: flex-start; }
+.receipt-head > div { flex: 1; }
+.receipt-icon { font-size: 18px; }
+.receipt-actions { display: flex; gap: 8px; margin-top: 10px; }
+.receipt-actions:empty { display: none; }
+
+/* ---------- duplicate previews ---------- */
+.ph-thumb {
+  width: 36px; height: 36px; object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--border); cursor: zoom-in; flex: 0 0 auto;
+  background: var(--surface-2);
+}
+.thumb-preview {
+  position: fixed; z-index: 70; width: 340px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.55);
+}
+.thumb-preview img {
+  width: 100%; max-height: 280px; object-fit: contain; border-radius: 8px;
+  background: var(--surface-2);
+}
+.thumb-preview .tp-name { font-weight: 650; font-size: 13px; margin-top: 8px; }
+.thumb-preview .tp-path {
+  font-size: 11px; color: var(--ink-3);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
+}
