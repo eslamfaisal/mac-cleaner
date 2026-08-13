@@ -108,8 +108,8 @@ decides how the results are presented, so switching is instant and never rescans
 
 | | Normal | Developer |
 |---|---|---|
-| **Categories** | 11 plain-language ones: System Junk, Trash, Large & Old Files, Duplicate Files, Downloads & Installers, Unused Apps & Leftovers, App Caches, Mail & Message Attachments, Photos/Music/Media, Backups & Updates — plus everything technical in a single *Developer & Pro Tools* card | All 26 technical ones, split by toolchain: Xcode, Android & JVM, Flutter, Node, Python, Docker, IDEs, project build artifacts, game engines … |
-| **Row labels** | What the item is ("Slack — cache", "Files you already deleted") | Exact name and path, bundle ids included |
+| **Categories** | 12 plain-language ones: System Junk, Trash, Large & Old Files, Duplicate Files, Downloads & Installers, Unused Apps & Leftovers, App Caches, Mail & Message Attachments, Photos/Music/Media, Backups & Updates, Cloud Files on This Mac — plus everything technical in a single *Developer & Pro Tools* card | All 26 technical ones, split by toolchain: Xcode, Android & JVM, Flutter, Node, Python, Docker, IDEs, project build artifacts, game engines … |
+| **Row labels** | What the item is ("Slack — cache", "Files you already deleted"), with the full path underneath | Exact name and path, bundle ids included |
 | **Deleting** | Moves to Trash by default | Deletes permanently by default |
 | **Terminal commands** | Hidden | Shown |
 
@@ -119,6 +119,16 @@ default and the Full Disk Access status. Both choices are stored in
 
 Neither mode ever deletes on its own: you select items and confirm, and anything classified
 `risky` needs a separate acknowledgment first.
+
+Every row shows the real path it refers to, and clicking that path opens the folder in Finder
+with the item selected. Anything you want to hold on to can be pinned with 📌 — it stays out
+of every future scan until you restore it from the "kept" chip.
+
+**Duplicate files** are matched by content, never by name: same byte size, then a sampled
+SHA-1 of the head, middle and tail. Sets show a Quick Look thumbnail (click for a bigger
+preview), say what deleting the extras would free, and always keep one copy — the set
+checkbox skips the newest file and the server refuses any request that would remove every
+copy of a set.
 
 ## Which download? Apple Silicon vs Intel
 
@@ -241,8 +251,9 @@ of old/superseded app data and 2.16 GB of leftovers from apps that were uninstal
 |---|---|---|
 | 🗑️ | **Trash** | The system Trash (per-volume) |
 | 🐋 | **Biggest Files** | Every file ≥ 50 MB across your home folder — including Movies, Music and Pictures — sorted largest-first. Media libraries shown read-only. |
-| 👯 | **Duplicate Files** | Identical files (same size + checksum) clustered into sets; one click selects every copy except the newest |
-| 🏠 | **Personal & Media** | Screenshots on the Desktop, Downloads untouched for 90+ days, Mail attachment copies, Podcast/Books downloads |
+| 👯 | **Duplicate Files** | Identical files from 1 MB up (same size + head/middle/tail checksum) clustered into sets, with a thumbnail preview; one click selects every copy except the newest |
+| 🏠 | **Personal & Media** | Screenshots on the Desktop, Downloads untouched for 90+ days, Mail attachment copies, Mail's downloaded messages (read-only), Podcast/Books downloads, screensaver videos macOS downloads in the background |
+| ☁️ | **Cloud files kept on disk** | iCloud Drive, Dropbox, OneDrive and Google Drive mirrors under `~/Library/Mobile Documents` and `~/Library/CloudStorage` — sized read-only, with Finder's "Remove Download" as the safe way to free them |
 | ⏳ | **Applications — Old & Unused** | Apps with no sign of use for 6+ months, duplicate installs of the same app, superseded per-version IDE data (Android Studio / JetBrains), old JetBrains Toolbox builds, forgotten 12 GB macOS installers |
 | 👻 | **Leftovers from Uninstalled Apps** | `Application Support` / `Containers` folders whose app is no longer installed |
 | 🗄️ | **System Data** | iOS device updates, Homebrew cache, diagnostic reports, update payloads, local snapshots, system caches |
