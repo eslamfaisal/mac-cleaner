@@ -187,25 +187,56 @@ const FDA_PROBES = [
 // belonging to the non-technical user this mode is for.
 const TCC_PROBE = path.join(HOME, 'Library/Application Support/com.apple.TCC/TCC.db');
 
-function fdaGranted() {
-  let sawDenied = false;
-  for (const p of FDA_PROBES) {
-    try { fs.readdirSync(p); return true; }
-    catch (e) { if (e.code !== 'ENOENT') sawDenied = true; }
+// NEVER probe these synchronously. While macOS has a permission prompt
+// pending for this app, the read does not fail — it blocks until the user
+// answers. On the event loop that means the window never paints and the app
+// looks dead. The probe runs off-thread, one at a time, and the answer is
+// whatever the last completed probe said.
+let fdaState = null;        // null = not determined yet
+let fdaProbing = false;
+
+function fdaGranted() { return fdaState; }
+
+const withTimeout = (p, ms) => Promise.race([
+  p,
+  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+]);
+
+async function probeFda() {
+  if (fdaProbing) return;   // a blocked probe must not spawn more of itself
+  fdaProbing = true;
+  try {
+    let sawDenied = false;
+    for (const p of FDA_PROBES) {
+      try { await withTimeout(fsp.readdir(p), 4000); fdaProbing = false; return setFda(true); }
+      catch (e) { if (e.code && e.code !== 'ENOENT') sawDenied = true; }
+    }
+    if (sawDenied) { fdaProbing = false; return setFda(false); }
+    try {
+      const fh = await withTimeout(fsp.open(TCC_PROBE, 'r'), 4000);
+      await fh.close();
+      fdaProbing = false;
+      return setFda(true);
+    } catch (e) {
+      fdaProbing = false;
+      // ENOENT on every probe means we simply cannot tell; anything else is a refusal
+      return setFda(e.code === 'ENOENT' ? true : false);
+    }
+  } catch {
+    fdaProbing = false;
   }
-  if (sawDenied) return false;
-  try { fs.closeSync(fs.openSync(TCC_PROBE, 'r')); return true; }
-  catch (e) { if (e.code !== 'ENOENT') return false; }
-  return true; // nothing readable and nothing denied — cannot tell, assume fine
+}
+
+function setFda(granted) {
+  if (granted === fdaState) return;
+  fdaState = granted;
+  broadcast('fda', { granted });
 }
 
 // Live re-probe: the settings pane grant takes effect for this running
 // process, so the UI pill can flip to "granted" without a restart.
-let fdaLast = null;
-setInterval(() => {
-  const g = fdaGranted();
-  if (g !== fdaLast) { fdaLast = g; broadcast('fda', { granted: g }); }
-}, 3000);
+probeFda();
+setInterval(probeFda, 3000);
 
 // ------------------------------------------------------------- disk -------
 
