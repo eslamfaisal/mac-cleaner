@@ -604,11 +604,22 @@ function renderHeader() {
   $('#detail').hidden = overview || settingsView;
   $('#settings').hidden = !settingsView;
 
+  // A scan that could not read everything must say so. Both of these were
+  // recorded by the scanner and read by nothing, so a short scan — whether
+  // from a folder macOS refused or a walk the watchdog killed — was
+  // indistinguishable from a complete one.
+  const denied = state.scan.walkDenied || 0;
+  const truncated = (state.scan.truncated || []).length;
+  const gaps = [];
+  if (denied) gaps.push(`${fmtCount(denied)} folder${denied === 1 ? '' : 's'} macOS would not let us read`);
+  if (truncated) gaps.push(`${fmtCount(truncated)} place${truncated === 1 ? '' : 's'} took too long and were skipped`);
+  const gapNote = gaps.length ? ` · ⚠ ${gaps.join(' · ')}` : '';
+
   if (state.scanEndedAt && status === 'done') {
     const min = Math.round((Date.now() - state.scanEndedAt) / 60000);
-    $('#scan-meta').textContent = `${fmtCount(state.items.size)} items · scanned ${min < 1 ? 'just now' : min + ' min ago'}`;
+    $('#scan-meta').textContent = `${fmtCount(state.items.size)} items · scanned ${min < 1 ? 'just now' : min + ' min ago'}${gapNote}`;
   } else if (status === 'done') {
-    $('#scan-meta').textContent = `${fmtCount(state.items.size)} items`;
+    $('#scan-meta').textContent = `${fmtCount(state.items.size)} items${gapNote}`;
   } else {
     $('#scan-meta').textContent = '';
   }

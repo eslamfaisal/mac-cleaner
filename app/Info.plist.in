@@ -18,5 +18,18 @@
   <dict>
     <key>NSAllowsLocalNetworking</key>    <true/>
   </dict>
+  <!-- The scan reads Desktop, Documents, Downloads and any mounted volume's
+       Trash. Without these, macOS still asks — it just asks with a blank
+       reason, which is exactly when people decline and then get a short scan
+       with no explanation. Not NSNetworkVolumesUsageDescription: the volume
+       scan anchors on /dev/disk, which excludes smbfs and nfs. -->
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Mac Cleaner looks for large and duplicate files on your Desktop. Nothing is deleted unless you select it and confirm.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Mac Cleaner looks for large and duplicate files in your Documents. Nothing is deleted unless you select it and confirm.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Mac Cleaner looks for old installers and large downloads you no longer need. Nothing is deleted unless you select it and confirm.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>Mac Cleaner reports how much space the Trash on a connected disk is still using. Nothing is deleted unless you select it and confirm.</string>
 </dict>
 </plist>

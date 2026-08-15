@@ -427,6 +427,11 @@ Connect API* (needs **Admin** access); the issuer UUID is on the same page.
 > blocks such apps on first launch and the old right-click → *Open* shortcut no longer
 > bypasses it (the user has to go to *System Settings → Privacy & Security → Open Anyway*).
 > Anything you hand to other people should be signed and notarized.
+>
+> An ad-hoc signature's designated requirement is its **cdhash**, so every
+> rebuild is a different identity as far as TCC is concerned: **Full Disk Access
+> has to be granted again after each ad-hoc rebuild.** A Developer ID signature
+> keeps the same identity across builds, so the grant sticks.
 
 > **Why it may download Node:** Homebrew's `node` links dylibs from the Cellar
 > (`@rpath/libnode…`) that don't exist on other machines. When the build detects a
@@ -436,7 +441,13 @@ Connect API* (needs **Admin** access); the issuer UUID is on the same page.
 ## Cutting a release
 
 ```sh
-# 1. bump the version
+# 0. re-check the bundled runtime: is NODE_DIST_VERSION in build-app.sh still
+#    the current 22.x LTS patch? Every DMG embeds it, and there is no update
+#    channel, so whatever ships here is what users run until they redownload.
+#    (The build verifies the binary is Apple-anchored and signed by the Node.js
+#    Foundation, so a stale pin is a freshness question, not a trust one.)
+
+# 1. bump the version  (VERSION is the single source — nothing else stores it)
 echo 1.1.1 > VERSION
 
 # 2. build all three DMGs (universal + Apple Silicon + Intel), signed + notarized
