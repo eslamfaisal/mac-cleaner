@@ -60,7 +60,9 @@ function loadSettings() {
         dev: raw.deleteMode?.dev === 'trash' ? 'trash' : 'rm',
       },
       keep: Array.isArray(raw.keep)
-        ? raw.keep.filter(p => typeof p === 'string' && path.isAbsolute(p)).slice(0, KEEP_MAX)
+        // .slice(-KEEP_MAX) to match saveSettings: trimming from opposite
+        // ends dropped the entries the other half had just kept
+        ? raw.keep.filter(p => typeof p === 'string' && path.isAbsolute(p)).slice(-KEEP_MAX)
         : [],
     };
   } catch { return structuredClone(DEFAULT_SETTINGS); }
@@ -140,7 +142,8 @@ function publicItem(i) {
   return {
     // abs is what the keep list is keyed on: display is home-relative and two
     // different volumes can produce the same "~" string
-    id: i.id, group: i.group, normalGroup: i.normalGroup, name: i.name, display: i.display, abs: i.path, safety: i.safety,
+    id: i.id, group: i.group, normalGroup: i.normalGroup, name: i.name, display: i.display, abs: i.path,
+    keepKey: i.keepKey || i.path, safety: i.safety,
     why: i.why, regen: i.regen, kind: i.kind, deleteMode: i.deleteMode,
     permanentOnly: i.permanentOnly, displayOnly: i.displayOnly, needs: i.needs || null, badges: i.badges,
     status: i.status, bytes: i.bytes, files: i.files, denied: i.denied,
@@ -198,35 +201,56 @@ let fdaProbing = false;
 
 function fdaGranted() { return fdaState; }
 
-const withTimeout = (p, ms) => Promise.race([
-  p,
-  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
-]);
+// Off-process, deliberately. Promise.race abandons the promise but NOT the
+// libuv threadpool thread the fs call is sitting on, and the comment above
+// says the read BLOCKS while a permission decision is pending — so one pass
+// could park all four default pool threads, after which every fsp.* in the
+// server stops starting: settings, disk refresh, static assets, thumbnails
+// and the delete pipeline. That is the freeze e6b9ac3 fixed, on a 16s delay.
+// child_process goes through uv_spawn on the event loop instead, and
+// execFile's own timeout SIGKILLs a child that never answers.
+const probePath = (p, ms) => new Promise((resolve) => {
+  execFile('/bin/ls', ['-1', '--', p], { timeout: ms }, (err) => {
+    if (!err) return resolve('ok');
+    if (err.killed || err.signal) return resolve('timeout');
+    resolve(/No such file or directory/i.test(err.stderr || '') ? 'enoent' : 'denied');
+  });
+});
 
 async function probeFda() {
   if (fdaProbing) return;   // a blocked probe must not spawn more of itself
   fdaProbing = true;
   try {
     let sawDenied = false;
-    for (const p of FDA_PROBES) {
-      try { await withTimeout(fsp.readdir(p), 4000); fdaProbing = false; return setFda(true); }
-      catch (e) { if (e.code && e.code !== 'ENOENT') sawDenied = true; }
+    for (const p of [...FDA_PROBES, TCC_PROBE]) {
+      const r = await probePath(p, 4000);
+      if (r === 'ok') return setFda(true);
+      // A probe that never answered tells us nothing, and retrying every 3s
+      // only stacks up more of them. Leave the answer as it was and slow down.
+      if (r === 'timeout') return backOffFda();
+      if (r === 'denied') sawDenied = true;
     }
-    if (sawDenied) { fdaProbing = false; return setFda(false); }
-    try {
-      const fh = await withTimeout(fsp.open(TCC_PROBE, 'r'), 4000);
-      await fh.close();
-      fdaProbing = false;
-      return setFda(true);
-    } catch (e) {
-      fdaProbing = false;
-      // ENOENT on every probe means we simply cannot tell; anything else is a refusal
-      return setFda(e.code === 'ENOENT' ? true : false);
-    }
+    // ENOENT everywhere means we genuinely cannot tell; anything else refused
+    setFda(!sawDenied);
   } catch {
+    // leave fdaState unchanged
+  } finally {
     fdaProbing = false;
   }
 }
+
+let fdaTimer = null;
+let fdaEvery = 3000;
+function scheduleFda(ms) {
+  fdaEvery = ms;
+  clearInterval(fdaTimer);
+  fdaTimer = setInterval(probeFda, ms);
+  fdaTimer.unref();
+}
+function backOffFda() { if (fdaEvery < 30000) scheduleFda(30000); }
+// the settings-pane grant applies to this running process, so a probe is
+// re-armed eagerly whenever the user is plausibly acting on it
+function probeFdaNow() { if (fdaEvery !== 3000) scheduleFda(3000); probeFda(); }
 
 function setFda(granted) {
   if (granted === fdaState) return;
@@ -237,7 +261,7 @@ function setFda(granted) {
 // Live re-probe: the settings pane grant takes effect for this running
 // process, so the UI pill can flip to "granted" without a restart.
 probeFda();
-setInterval(probeFda, 3000);
+scheduleFda(3000);
 
 // ------------------------------------------------------------- disk -------
 
@@ -671,6 +695,45 @@ const STATIC = {
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
 };
 
+// 'unsafe-inline' in style-src is REQUIRED as written: public/app.js injects
+// style= attributes through innerHTML for the disk-legend swatches and one
+// button. Drop it only after moving those into style.css classes.
+// img-src data: is required for the inline favicon.
+const SECURITY_HEADERS = {
+  'x-frame-options': 'DENY',
+  'content-security-policy': [
+    "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:", "connect-src 'self'", "object-src 'none'",
+    "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
+  ].join('; '),
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+};
+
+const eqToken = (v) => {
+  if (typeof v !== 'string' || v.length !== TOKEN.length) return false;
+  try { return crypto.timingSafeEqual(Buffer.from(v), Buffer.from(TOKEN)); } catch { return false; }
+};
+
+// Every entry point, not just POST. GET / used to hand the live token to any
+// local caller with no check at all, and GET /api/state the entire file
+// inventory — so a sandboxed app holding only network.client, or a different
+// UID on a shared Mac, could scrape the token and issue a permanent delete.
+// The cookie is what keeps EventSource working: it cannot send headers.
+function readCookie(req, name) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return v.join('=');
+  }
+  return null;
+}
+
+function authed(req, url) {
+  return eqToken(req.headers['x-token']) || eqToken(url.searchParams.get('t')) || eqToken(readCookie(req, 'mc'));
+}
+
 function hostOk(req) {
   const host = String(req.headers.host || '');
   return host === `127.0.0.1:${boundPort}` || host === `localhost:${boundPort}`;
@@ -709,7 +772,37 @@ function json(res, code, obj) {
 // system's own Quick Look generator, so whatever Finder can preview, we can.
 // Only paths the scanner itself registered are ever passed to qlmanage, the
 // request is token-gated, and results are cached per (path, mtime, size).
-const THUMB_DIR = path.join(os.tmpdir(), `mac-cleaner-thumbs-${BOOT_ID}`);
+// A per-boot directory under os.tmpdir() was created with the default mode,
+// never removed by anything (SIGTERM runs no JS), and cold on every launch, so
+// qlmanage re-rendered yesterday's previews into a new world-readable folder
+// each time. A stable private one is correct because the cache key already
+// includes path+mtime+size+px. NOT os.tmpdir() without the random suffix: with
+// TMPDIR unset Node falls back to world-writable /tmp, where a predictable
+// name lets another local user pre-create the directory and read Quick Look
+// renders of this user's private photos.
+const THUMB_DIR = path.join(HOME, 'Library/Caches/mac-cleaner/thumbs');
+const THUMB_BUDGET_BYTES = 256 * 1024 * 1024;
+
+function pruneThumbs() {
+  try {
+    fs.mkdirSync(THUMB_DIR, { recursive: true, mode: 0o700 });
+    const files = fs.readdirSync(THUMB_DIR)
+      .map((n) => {
+        const f = path.join(THUMB_DIR, n);
+        try { return { f, n, st: fs.statSync(f) }; } catch { return null; }
+      })
+      .filter(Boolean);
+    // work dirs from a previous run that was killed mid-render
+    for (const x of files) if (x.n.startsWith('w-')) { fs.rmSync(x.f, { recursive: true, force: true }); }
+    const pngs = files.filter((x) => x.n.endsWith('.png')).sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+    let total = 0;
+    for (const x of pngs) {
+      total += x.st.size;
+      if (total > THUMB_BUDGET_BYTES) { try { fs.rmSync(x.f, { force: true }); } catch {} }
+    }
+  } catch {}
+}
+pruneThumbs();
 const THUMB_GROUPS = new Set(['duplicates', 'large', 'installers', 'binaries', 'personal']);
 const thumbInFlight = new Map(); // cacheKey -> Promise<string|null>
 
@@ -754,10 +847,28 @@ const server = http.createServer(async (req, res) => {
   // ---- static ----
   if (req.method === 'GET' && STATIC[url.pathname]) {
     const s = STATIC[url.pathname];
+    // The page carries the live token in its DOM and its own buttons perform
+    // the deletes, so framing it cross-origin satisfies hostOk, originOk and
+    // the x-token gate with the victim's own clicks. Nothing was stopping
+    // that: no CSP, no meta-CSP, no frame-busting anywhere.
+    if (!authed(req, url)) { json(res, 403, { error: 'forbidden' }); return; }
+    // Arrived with the token in the query string: hand back a cookie and
+    // bounce to the bare path, so the token is not left in the address bar,
+    // in history, or in a Referer.
+    if (s.token && url.searchParams.get('t') && !readCookie(req, 'mc')) {
+      res.writeHead(302, {
+        ...SECURITY_HEADERS,
+        'set-cookie': `mc=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
+        'location': '/',
+        'cache-control': 'no-store',
+      });
+      res.end();
+      return;
+    }
     try {
       let body = await fsp.readFile(path.join(PUB, s.file), 'utf8');
       if (s.token) body = body.replace('__TOKEN__', TOKEN);
-      res.writeHead(200, { 'content-type': s.type, 'cache-control': 'no-store' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': s.type, 'cache-control': 'no-store' });
       res.end(body);
     } catch { json(res, 500, { error: 'missing asset' }); }
     return;
@@ -765,6 +876,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---- SSE ----
   if (req.method === 'GET' && url.pathname === '/api/events') {
+    if (!authed(req, url)) { json(res, 403, { error: 'forbidden' }); return; }
     res.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-store',
@@ -778,13 +890,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/state') {
+    if (!authed(req, url)) { json(res, 403, { error: 'forbidden' }); return; }
     json(res, 200, snapshot());
     return;
   }
 
   // ---- thumbnails (token in query — <img> tags cannot send headers) ----
   if (req.method === 'GET' && url.pathname === '/api/thumb') {
-    if (url.searchParams.get('t') !== TOKEN) { json(res, 403, { error: 'bad token' }); return; }
+    if (!authed(req, url)) { json(res, 403, { error: 'bad token' }); return; }
     const item = scanner.items.get(String(url.searchParams.get('id') || ''));
     const target = item && THUMB_GROUPS.has(item.group) ? thumbTarget(item) : null;
     if (!target) { json(res, 404, { error: 'no preview' }); return; }
@@ -801,7 +914,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---- POSTs (token-gated) ----
   if (req.method === 'POST') {
-    if (req.headers['x-token'] !== TOKEN) { json(res, 403, { error: 'bad token' }); return; }
+    if (!authed(req, url)) { json(res, 403, { error: 'bad token' }); return; }
     let body;
     try { body = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return; }
 
@@ -813,6 +926,7 @@ const server = http.createServer(async (req, res) => {
         deletedReals.length = 0;
         scanner.startScan();
         refreshDisk();
+        probeFdaNow();
         broadcast('fda', { granted: fdaGranted() });
         json(res, 200, { ok: true });
         return;
@@ -822,6 +936,7 @@ const server = http.createServer(async (req, res) => {
       case '/api/settings/fda':
         // deep-link to System Settings → Privacy & Security → Full Disk Access
         execFile('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'], { timeout: 5000 }, () => {});
+        probeFdaNow();
         json(res, 200, { ok: true });
         return;
       case '/api/scan/cancel':
@@ -854,10 +969,24 @@ const server = http.createServer(async (req, res) => {
   json(res, 404, { error: 'not found' });
 });
 
+// applicationWillTerminate is the ONLY thing that stopped this process, and it
+// never runs on SIGKILL or a wrapper crash. Force-quitting the app because the
+// UI stopped responding mid-clean left pumpDeletes draining the queue to
+// completion, with Full Disk Access, after the window was gone — and the port
+// stayed bound with a live token until reboot. ppid === 1 is the reliable
+// orphan signal on macOS and cannot be fooled by PID reuse. Gated on APP_MODE
+// so ./run.sh and CI, which are legitimately parented elsewhere, are unaffected.
+if (process.env.APP_MODE === '1') {
+  setInterval(() => {
+    if (process.ppid === 1) { try { scanner.cancelScan(); } catch {} process.exit(0); }
+  }, 2000).unref();
+}
+
 refreshDisk();
 server.listen(PORT, '127.0.0.1', () => {
   boundPort = server.address().port;
   console.log(`LISTENING ${boundPort}`);
-  console.log(`Mac Cleaner dashboard → http://127.0.0.1:${boundPort}`);
+  console.log(`TOKEN ${TOKEN}`);
+  console.log(`Mac Cleaner dashboard → http://127.0.0.1:${boundPort}/?t=${TOKEN}`);
   console.log(`Grant Full Disk Access to your terminal for complete results.`);
 });
