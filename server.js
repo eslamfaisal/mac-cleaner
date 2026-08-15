@@ -20,6 +20,7 @@ import { Scanner, GROUPS, NORMAL_GROUPS, HOME } from './lib/scanner.js';
 import { SUGGESTED_COMMANDS, WALK } from './lib/categories.js';
 
 const PACKAGE_SKIPS = WALK.packageSkips;
+const OPAQUE_BUNDLES = WALK.opaqueBundles;
 
 // PORT=0 asks the OS for an ephemeral port (used by the .app wrapper, which
 // reads the LISTENING line from stdout). boundPort is the real port once bound.
@@ -288,21 +289,28 @@ const BANNED_PREFIXES = [
 // Per-volume Trash: "/Volumes/<name>/.Trashes/<uid>" and anything inside it.
 const VOLUME_TRASH_RE = /^\/Volumes\/[^/]+\/\.Trashes\/\d+(\/|$)/;
 
-// A file inside a Photos/Music/Final Cut library is not a document — removing
-// one corrupts the whole library. The scanner never offers these, and this is
-// the backstop that keeps that true regardless of what the scanner emits.
+// A file inside a macOS package is not a document — removing one corrupts the
+// whole package, whether that is a Photos library, a Logic project, a VM disk
+// or an app bundle. The scanner never offers these, and this is the backstop
+// that keeps that true regardless of what the scanner emits.
 // The one exception is a legacy iPod sync cache that Apple's own advice says
 // to delete: it holds no library data, and the scanner offers it deliberately.
 const PACKAGE_INTERIOR_ALLOW = /\.(photoslibrary|migratedphotolibrary)\/iPod Photo Cache$/;
 
-function insideMediaLibrary(norm) {
-  if (PACKAGE_INTERIOR_ALLOW.test(norm)) return false;
+// Only NON-FINAL segments are tested: deleting the package itself is allowed
+// (that is exactly what the one-row-per-bundle design offers), deleting
+// something inside it is not.
+function insidePackage(norm) {
+  if (PACKAGE_INTERIOR_ALLOW.test(norm)) return null;
   const segs = norm.split('/');
   for (let i = 0; i < segs.length - 1; i++) {
     const s = segs[i].toLowerCase();
-    if (PACKAGE_SKIPS.some(x => s.endsWith(x))) return true;
+    if (PACKAGE_SKIPS.some(x => s.endsWith(x))) return 'media';
+    // a name that IS the suffix is a dot-directory, not a package — Ruby's
+    // ~/.bundle/cache must stay deletable
+    if (OPAQUE_BUNDLES.some(x => s.length > x.length && s.endsWith(x))) return 'bundle';
   }
-  return false;
+  return null;
 }
 
 function validateDeletablePath(p) {
@@ -311,7 +319,9 @@ function validateDeletablePath(p) {
   const norm = path.normalize(p);
   if (norm.includes('..')) throw new Error('invalid path');
   if (BANNED_EXACT.has(norm)) throw new Error('protected path');
-  if (insideMediaLibrary(norm)) throw new Error('inside a media library — manage it from the app that owns it');
+  const pkg = insidePackage(norm);
+  if (pkg === 'media') throw new Error('inside a media library — manage it from the app that owns it');
+  if (pkg === 'bundle') throw new Error('inside an app, VM or document package — delete the whole package instead');
   for (const b of BANNED_PREFIXES) {
     if (!norm.startsWith(b)) continue;
     // Say which rule stopped it. "protected path" on a Dropbox folder that
