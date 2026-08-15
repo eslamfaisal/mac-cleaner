@@ -166,10 +166,10 @@ function setUiMode(mode, { persist = true } = {}) {
 // re-asks the same question, and the answer is re-made by hand every time.
 function keepItem(id) {
   const item = state.items.get(id);
-  if (!item || !item.abs) return;
-  state.keep.add(item.abs);
+  if (!item || !item.keepKey) return;
+  state.keep.add(item.keepKey);
   state.selection.delete(id);
-  saveSettings({ keepAdd: item.abs });
+  saveSettings({ keepAdd: item.keepKey });
   toast(`Keeping ${displayName(item)} — hidden from scans until you restore it.`);
   markDirty();
 }
@@ -180,7 +180,7 @@ function unkeepAll() {
   markDirty();
 }
 
-const isKept = (i) => state.keep.has(i.abs);
+const isKept = (i) => state.keep.has(i.keepKey);
 
 function setDeleteMode(mode) {
   if (mode !== 'trash' && mode !== 'rm') return;
