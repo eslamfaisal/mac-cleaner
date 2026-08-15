@@ -317,7 +317,16 @@ function validateDeletablePath(p) {
   // Throws with a reason when the path must not be deleted.
   if (typeof p !== 'string' || !path.isAbsolute(p)) throw new Error('invalid path');
   const norm = path.normalize(p);
-  if (norm.includes('..')) throw new Error('invalid path');
+  // A SEGMENT test, not a substring one. path.normalize has already collapsed
+  // every real '..' out of an absolute path, so a substring match could only
+  // ever fire on two dots inside a filename — "Talk with....mp4",
+  // "session..swp", "lib-1.2..3.jar". Those are ordinary files, and rejecting
+  // them broke emptying the Trash (deleteMode 'contents' validates inside the
+  // same loop that deletes, so one such entry aborted the rest) and made the
+  // whole "90+ days in Downloads" row permanently undeletable.
+  // Containment is enforced below by BANNED_EXACT/BANNED_PREFIXES/ALLOWED_ROOTS;
+  // this stays as a cheap assertion.
+  if (norm.split('/').includes('..')) throw new Error('invalid path');
   if (BANNED_EXACT.has(norm)) throw new Error('protected path');
   const pkg = insidePackage(norm);
   if (pkg === 'media') throw new Error('inside a media library — manage it from the app that owns it');
@@ -360,6 +369,17 @@ function validateItemForDelete(item) {
     // symlink-swap defense applies to every target, incl. kind 'files'
     const st = fs.lstatSync(t); // throws if missing
     if (st.isSymbolicLink()) throw new Error('target is a symlink');
+    // ...and the same for a symlinked PARENT. lstat resolves intermediate
+    // components, so only the leaf was protected: with ~/Downloads or
+    // ~/Desktop symlinked into ~/Library/CloudStorage or Mobile Documents — a
+    // routine "keep Downloads in Dropbox" setup — every target still reads
+    // ~/Downloads/<name> while the delete lands in the sync root and
+    // propagates to every device. That is exactly what BANNED_PREFIXES exists
+    // to stop, and kind 'files' was the one shape that skipped the check.
+    // (Trash is no safer: a rename out of a CloudDocs folder removes it from
+    // the cloud too.)
+    const rt = fs.realpathSync(t);
+    if (rt !== t) validateDeletablePath(rt);
   }
   if (item.kind !== 'files') {
     // TOCTOU defense: the path must still resolve to what we registered,
@@ -534,7 +554,17 @@ function countedAlready(item) {
 }
 
 async function listDeleteTargets(item) {
-  if (item.kind === 'files') return [...item.paths, ...(item.extraDelete || [])];
+  if (item.kind === 'files') {
+    // Same re-assert the 'contents' branch below has always done, for the one
+    // shape that never had it: the parent must still resolve to what the scan
+    // registered, so a directory swapped for a symlink between validation and
+    // delete cannot redirect the batch.
+    if (item.real) {
+      const parent = fs.realpathSync(item.path);
+      if (parent !== item.real) throw new Error('path changed since scan — rescan first');
+    }
+    return [...item.paths, ...(item.extraDelete || [])];
+  }
   if (item.deleteMode === 'contents') {
     // re-assert right before the readdir that the dir wasn't swapped for a
     // symlink after validation (TOCTOU on the contents enumeration)
@@ -549,20 +579,41 @@ async function listDeleteTargets(item) {
   return [item.path, ...(item.extraDelete || [])];
 }
 
+// One unusable target must not abandon the rest of a multi-target delete —
+// emptying the Trash is a single row covering everything inside it, and a
+// locked or in-use entry used to leave the job half done. Failures are
+// collected and rethrown AFTER the loop rather than swallowed: runDelete
+// credits the row's full byte count and marks it deleted whenever the delete
+// function returns without throwing, so swallowing would report a fully
+// cleaned row for a partially cleaned directory.
+function reportPartial(failures, total) {
+  if (!failures.length) return;
+  const first = friendlyError(failures[0].error);
+  throw new Error(failures.length === total
+    ? first
+    : `${failures.length} of ${total} items could not be removed — first: ${first}`);
+}
+
 async function permanentDelete(item) {
   const targets = await listDeleteTargets(item);
+  const failures = [];
   for (const t of targets) {
-    validateDeletablePath(t);
     try {
-      await fsp.rm(t, { recursive: true, force: true, maxRetries: 2 });
-    } catch (e) {
-      if (e.code === 'EACCES' || e.code === 'EPERM') {
-        // read-only trees (Go module cache): make writable, retry once
-        await new Promise((res) => execFile('/bin/chmod', ['-R', 'u+w', t], { timeout: 120000 }, () => res()));
+      validateDeletablePath(t);
+      try {
         await fsp.rm(t, { recursive: true, force: true, maxRetries: 2 });
-      } else throw e;
+      } catch (e) {
+        if (e.code === 'EACCES' || e.code === 'EPERM') {
+          // read-only trees (Go module cache): make writable, retry once
+          await new Promise((res) => execFile('/bin/chmod', ['-R', 'u+w', t], { timeout: 120000 }, () => res()));
+          await fsp.rm(t, { recursive: true, force: true, maxRetries: 2 });
+        } else throw e;
+      }
+    } catch (error) {
+      failures.push({ t, error });
     }
   }
+  reportPartial(failures, targets.length);
 }
 
 let trashSeq = 0;
@@ -571,32 +622,38 @@ const trashReserved = new Set(); // dest names claimed by in-flight jobs
 async function moveToTrash(item) {
   const trash = path.join(HOME, '.Trash');
   const targets = await listDeleteTargets(item);
+  const failures = [];
   for (const t of targets) {
-    validateDeletablePath(t);
-    // Two concurrent jobs trashing files with the same basename must never
-    // resolve the same dest — rename over an existing file is a silent
-    // overwrite. Reservation is SYNCHRONOUS (no await between check and add)
-    // so concurrent jobs can't both claim the base name; the per-boot seq
-    // suffix is unique, so only the base name needs an on-disk check.
-    const reserve = () => {
-      let d = path.join(trash, path.basename(t));
-      if (trashReserved.has(d)) d = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
-      trashReserved.add(d);
-      return d;
-    };
-    let dest = reserve();
-    try { await fsp.access(dest); dest = reserve(); } catch { /* free */ }
     try {
-      await fsp.rename(t, dest);
-    } catch (e) {
-      if (e.code === 'EXDEV') throw new Error('different volume — use permanent delete for this item');
-      if (e.code === 'ENOTEMPTY' || e.code === 'EEXIST') {
-        const retry = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
-        trashReserved.add(retry);
-        await fsp.rename(t, retry);
-      } else throw e;
+      validateDeletablePath(t);
+      // Two concurrent jobs trashing files with the same basename must never
+      // resolve the same dest — rename over an existing file is a silent
+      // overwrite. Reservation is SYNCHRONOUS (no await between check and add)
+      // so concurrent jobs can't both claim the base name; the per-boot seq
+      // suffix is unique, so only the base name needs an on-disk check.
+      const reserve = () => {
+        let d = path.join(trash, path.basename(t));
+        if (trashReserved.has(d)) d = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
+        trashReserved.add(d);
+        return d;
+      };
+      let dest = reserve();
+      try { await fsp.access(dest); dest = reserve(); } catch { /* free */ }
+      try {
+        await fsp.rename(t, dest);
+      } catch (e) {
+        if (e.code === 'EXDEV') throw new Error('different volume — use permanent delete for this item');
+        if (e.code === 'ENOTEMPTY' || e.code === 'EEXIST') {
+          const retry = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
+          trashReserved.add(retry);
+          await fsp.rename(t, retry);
+        } else throw e;
+      }
+    } catch (error) {
+      failures.push({ t, error });
     }
   }
+  reportPartial(failures, targets.length);
 }
 
 function friendlyError(e) {
