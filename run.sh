@@ -19,5 +19,7 @@ if [ -n "$pids" ]; then
   [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
 fi
 
-echo "Starting Mac Cleaner on http://127.0.0.1:${PORT}"
+# The dashboard needs the per-boot token, so use the URL the server prints
+# below — the bare address is refused on purpose.
+echo "Starting Mac Cleaner on port ${PORT} — open the URL printed below."
 exec env PORT="$PORT" node server.js

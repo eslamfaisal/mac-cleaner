@@ -20,6 +20,7 @@ import { Scanner, GROUPS, NORMAL_GROUPS, HOME } from './lib/scanner.js';
 import { SUGGESTED_COMMANDS, WALK } from './lib/categories.js';
 
 const PACKAGE_SKIPS = WALK.packageSkips;
+const OPAQUE_BUNDLES = WALK.opaqueBundles;
 
 // PORT=0 asks the OS for an ephemeral port (used by the .app wrapper, which
 // reads the LISTENING line from stdout). boundPort is the real port once bound.
@@ -59,7 +60,9 @@ function loadSettings() {
         dev: raw.deleteMode?.dev === 'trash' ? 'trash' : 'rm',
       },
       keep: Array.isArray(raw.keep)
-        ? raw.keep.filter(p => typeof p === 'string' && path.isAbsolute(p)).slice(0, KEEP_MAX)
+        // .slice(-KEEP_MAX) to match saveSettings: trimming from opposite
+        // ends dropped the entries the other half had just kept
+        ? raw.keep.filter(p => typeof p === 'string' && path.isAbsolute(p)).slice(-KEEP_MAX)
         : [],
     };
   } catch { return structuredClone(DEFAULT_SETTINGS); }
@@ -139,14 +142,15 @@ function publicItem(i) {
   return {
     // abs is what the keep list is keyed on: display is home-relative and two
     // different volumes can produce the same "~" string
-    id: i.id, group: i.group, normalGroup: i.normalGroup, name: i.name, display: i.display, abs: i.path, safety: i.safety,
+    id: i.id, group: i.group, normalGroup: i.normalGroup, name: i.name, display: i.display, abs: i.path,
+    keepKey: i.keepKey || i.path, safety: i.safety,
     why: i.why, regen: i.regen, kind: i.kind, deleteMode: i.deleteMode,
     permanentOnly: i.permanentOnly, displayOnly: i.displayOnly, needs: i.needs || null, badges: i.badges,
     status: i.status, bytes: i.bytes, files: i.files, denied: i.denied,
     error: i.error || null, mtime: i.mtime || null,
     project: i.project ? (i.project.startsWith(HOME) ? '~' + i.project.slice(HOME.length) : i.project) : null,
     projectName: i.projectName || null,
-    dupNewest: !!i.dupNewest, dupSet: i.dupSet || null,
+    dupKeep: !!i.dupKeep, dupSet: i.dupSet || null,
     noTotal: !!i.noTotal,
   };
 }
@@ -197,35 +201,56 @@ let fdaProbing = false;
 
 function fdaGranted() { return fdaState; }
 
-const withTimeout = (p, ms) => Promise.race([
-  p,
-  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
-]);
+// Off-process, deliberately. Promise.race abandons the promise but NOT the
+// libuv threadpool thread the fs call is sitting on, and the comment above
+// says the read BLOCKS while a permission decision is pending — so one pass
+// could park all four default pool threads, after which every fsp.* in the
+// server stops starting: settings, disk refresh, static assets, thumbnails
+// and the delete pipeline. That is the freeze e6b9ac3 fixed, on a 16s delay.
+// child_process goes through uv_spawn on the event loop instead, and
+// execFile's own timeout SIGKILLs a child that never answers.
+const probePath = (p, ms) => new Promise((resolve) => {
+  execFile('/bin/ls', ['-1', '--', p], { timeout: ms }, (err) => {
+    if (!err) return resolve('ok');
+    if (err.killed || err.signal) return resolve('timeout');
+    resolve(/No such file or directory/i.test(err.stderr || '') ? 'enoent' : 'denied');
+  });
+});
 
 async function probeFda() {
   if (fdaProbing) return;   // a blocked probe must not spawn more of itself
   fdaProbing = true;
   try {
     let sawDenied = false;
-    for (const p of FDA_PROBES) {
-      try { await withTimeout(fsp.readdir(p), 4000); fdaProbing = false; return setFda(true); }
-      catch (e) { if (e.code && e.code !== 'ENOENT') sawDenied = true; }
+    for (const p of [...FDA_PROBES, TCC_PROBE]) {
+      const r = await probePath(p, 4000);
+      if (r === 'ok') return setFda(true);
+      // A probe that never answered tells us nothing, and retrying every 3s
+      // only stacks up more of them. Leave the answer as it was and slow down.
+      if (r === 'timeout') return backOffFda();
+      if (r === 'denied') sawDenied = true;
     }
-    if (sawDenied) { fdaProbing = false; return setFda(false); }
-    try {
-      const fh = await withTimeout(fsp.open(TCC_PROBE, 'r'), 4000);
-      await fh.close();
-      fdaProbing = false;
-      return setFda(true);
-    } catch (e) {
-      fdaProbing = false;
-      // ENOENT on every probe means we simply cannot tell; anything else is a refusal
-      return setFda(e.code === 'ENOENT' ? true : false);
-    }
+    // ENOENT everywhere means we genuinely cannot tell; anything else refused
+    setFda(!sawDenied);
   } catch {
+    // leave fdaState unchanged
+  } finally {
     fdaProbing = false;
   }
 }
+
+let fdaTimer = null;
+let fdaEvery = 3000;
+function scheduleFda(ms) {
+  fdaEvery = ms;
+  clearInterval(fdaTimer);
+  fdaTimer = setInterval(probeFda, ms);
+  fdaTimer.unref();
+}
+function backOffFda() { if (fdaEvery < 30000) scheduleFda(30000); }
+// the settings-pane grant applies to this running process, so a probe is
+// re-armed eagerly whenever the user is plausibly acting on it
+function probeFdaNow() { if (fdaEvery !== 3000) scheduleFda(3000); probeFda(); }
 
 function setFda(granted) {
   if (granted === fdaState) return;
@@ -236,7 +261,7 @@ function setFda(granted) {
 // Live re-probe: the settings pane grant takes effect for this running
 // process, so the UI pill can flip to "granted" without a restart.
 probeFda();
-setInterval(probeFda, 3000);
+scheduleFda(3000);
 
 // ------------------------------------------------------------- disk -------
 
@@ -288,30 +313,48 @@ const BANNED_PREFIXES = [
 // Per-volume Trash: "/Volumes/<name>/.Trashes/<uid>" and anything inside it.
 const VOLUME_TRASH_RE = /^\/Volumes\/[^/]+\/\.Trashes\/\d+(\/|$)/;
 
-// A file inside a Photos/Music/Final Cut library is not a document — removing
-// one corrupts the whole library. The scanner never offers these, and this is
-// the backstop that keeps that true regardless of what the scanner emits.
+// A file inside a macOS package is not a document — removing one corrupts the
+// whole package, whether that is a Photos library, a Logic project, a VM disk
+// or an app bundle. The scanner never offers these, and this is the backstop
+// that keeps that true regardless of what the scanner emits.
 // The one exception is a legacy iPod sync cache that Apple's own advice says
 // to delete: it holds no library data, and the scanner offers it deliberately.
 const PACKAGE_INTERIOR_ALLOW = /\.(photoslibrary|migratedphotolibrary)\/iPod Photo Cache$/;
 
-function insideMediaLibrary(norm) {
-  if (PACKAGE_INTERIOR_ALLOW.test(norm)) return false;
+// Only NON-FINAL segments are tested: deleting the package itself is allowed
+// (that is exactly what the one-row-per-bundle design offers), deleting
+// something inside it is not.
+function insidePackage(norm) {
+  if (PACKAGE_INTERIOR_ALLOW.test(norm)) return null;
   const segs = norm.split('/');
   for (let i = 0; i < segs.length - 1; i++) {
     const s = segs[i].toLowerCase();
-    if (PACKAGE_SKIPS.some(x => s.endsWith(x))) return true;
+    if (PACKAGE_SKIPS.some(x => s.endsWith(x))) return 'media';
+    // a name that IS the suffix is a dot-directory, not a package — Ruby's
+    // ~/.bundle/cache must stay deletable
+    if (OPAQUE_BUNDLES.some(x => s.length > x.length && s.endsWith(x))) return 'bundle';
   }
-  return false;
+  return null;
 }
 
 function validateDeletablePath(p) {
   // Throws with a reason when the path must not be deleted.
   if (typeof p !== 'string' || !path.isAbsolute(p)) throw new Error('invalid path');
   const norm = path.normalize(p);
-  if (norm.includes('..')) throw new Error('invalid path');
+  // A SEGMENT test, not a substring one. path.normalize has already collapsed
+  // every real '..' out of an absolute path, so a substring match could only
+  // ever fire on two dots inside a filename — "Talk with....mp4",
+  // "session..swp", "lib-1.2..3.jar". Those are ordinary files, and rejecting
+  // them broke emptying the Trash (deleteMode 'contents' validates inside the
+  // same loop that deletes, so one such entry aborted the rest) and made the
+  // whole "90+ days in Downloads" row permanently undeletable.
+  // Containment is enforced below by BANNED_EXACT/BANNED_PREFIXES/ALLOWED_ROOTS;
+  // this stays as a cheap assertion.
+  if (norm.split('/').includes('..')) throw new Error('invalid path');
   if (BANNED_EXACT.has(norm)) throw new Error('protected path');
-  if (insideMediaLibrary(norm)) throw new Error('inside a media library — manage it from the app that owns it');
+  const pkg = insidePackage(norm);
+  if (pkg === 'media') throw new Error('inside a media library — manage it from the app that owns it');
+  if (pkg === 'bundle') throw new Error('inside an app, VM or document package — delete the whole package instead');
   for (const b of BANNED_PREFIXES) {
     if (!norm.startsWith(b)) continue;
     // Say which rule stopped it. "protected path" on a Dropbox folder that
@@ -350,6 +393,17 @@ function validateItemForDelete(item) {
     // symlink-swap defense applies to every target, incl. kind 'files'
     const st = fs.lstatSync(t); // throws if missing
     if (st.isSymbolicLink()) throw new Error('target is a symlink');
+    // ...and the same for a symlinked PARENT. lstat resolves intermediate
+    // components, so only the leaf was protected: with ~/Downloads or
+    // ~/Desktop symlinked into ~/Library/CloudStorage or Mobile Documents — a
+    // routine "keep Downloads in Dropbox" setup — every target still reads
+    // ~/Downloads/<name> while the delete lands in the sync root and
+    // propagates to every device. That is exactly what BANNED_PREFIXES exists
+    // to stop, and kind 'files' was the one shape that skipped the check.
+    // (Trash is no safer: a rename out of a CloudDocs folder removes it from
+    // the cloud too.)
+    const rt = fs.realpathSync(t);
+    if (rt !== t) validateDeletablePath(rt);
   }
   if (item.kind !== 'files') {
     // TOCTOU defense: the path must still resolve to what we registered,
@@ -365,6 +419,49 @@ function validateItemForDelete(item) {
 
 const deleteQueue = [];
 let deleting = 0;
+
+// ------------------------------------------- duplicate verification -------
+// The scan clusters duplicates from a 384 KB sample (head, middle, tail) plus
+// the exact size. That is a filter, not a verdict — cloned VM disks,
+// preallocated database files and .sparsebundle bands can all agree on those
+// three windows and differ in between. So no duplicate is removed until its
+// entire content has been compared, byte for byte, against a copy that will
+// still be there afterwards.
+//
+// Hashes are cached on (path, mtime, size) so the surviving copy of a set is
+// read once per batch rather than once per copy being removed.
+const fullHashCache = new Map();
+
+async function hashAll(paths) {
+  const keyOf = new Map();
+  const need = [];
+  for (const p of paths) {
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    const k = `${p}|${st.mtimeMs}|${st.size}`;
+    keyOf.set(p, k);
+    if (!fullHashCache.has(k)) need.push(p);
+  }
+  if (need.length) {
+    const got = await scanner.fullHashes(need);
+    for (const p of need) fullHashCache.set(keyOf.get(p), got.get(p) ?? null);
+  }
+  const out = new Map();
+  for (const [p, k] of keyOf) out.set(p, fullHashCache.get(k) ?? null);
+  return out;
+}
+
+async function duplicateHasIdenticalSurvivor(item) {
+  if (!item.dupSet) return false;
+  const survivors = [...scanner.items.values()].filter(i =>
+    i.group === 'duplicates' && i.dupSet === item.dupSet && i.id !== item.id &&
+    !['queued', 'deleting', 'deleted', 'gone', 'missing'].includes(i.status));
+  if (!survivors.length) return false;
+  const hashes = await hashAll([item.path, ...survivors.map(s => s.path)]);
+  const mine = hashes.get(item.path);
+  if (!mine) return false;   // unreadable never counts as a match
+  return survivors.some(s => hashes.get(s.path) === mine);
+}
 
 // A duplicate cluster exists to save space while keeping one copy. A batch
 // holding every surviving copy of a set is always a mistake (a stray "select
@@ -387,8 +484,10 @@ function keepOneOfEachDuplicateSet(ids) {
     // and refusing to delete it would strand the file forever
     if (alive.length < 2) continue;
     if (chosen.length < alive.length) continue; // at least one copy survives
-    // keep the one the scan marked as the suggested keeper, else the newest
-    const keeper = chosen.find(i => i.dupNewest) || chosen[0];
+    // Keep the one the scan marked as the suggested keeper. Fall back to the
+    // same ordering the scan used rather than an arbitrary array position:
+    // `chosen[0]` is whatever order the client happened to send.
+    const keeper = alive.find(i => i.dupKeep) || chosen.find(i => i.dupKeep) || chosen[0];
     held.add(keeper.id);
   }
   return held;
@@ -431,6 +530,19 @@ async function runDelete({ item, mode }) {
     }
     return;
   }
+  // The one check that must happen before the row is committed to deletion:
+  // a sampled match is not proof, and this is the last moment it can be
+  // turned into proof.
+  if (item.group === 'duplicates') {
+    let identical = false;
+    try { identical = await duplicateHasIdenticalSurvivor(item); }
+    catch { identical = false; }
+    if (!identical) {
+      scanner.markDeleted(item.id, false,
+        'Not deleted — reading the whole file showed it is not identical to the copy being kept');
+      return;
+    }
+  }
   scanner.markDeleting(item.id);
   try {
     let trashed = false;
@@ -466,7 +578,17 @@ function countedAlready(item) {
 }
 
 async function listDeleteTargets(item) {
-  if (item.kind === 'files') return [...item.paths, ...(item.extraDelete || [])];
+  if (item.kind === 'files') {
+    // Same re-assert the 'contents' branch below has always done, for the one
+    // shape that never had it: the parent must still resolve to what the scan
+    // registered, so a directory swapped for a symlink between validation and
+    // delete cannot redirect the batch.
+    if (item.real) {
+      const parent = fs.realpathSync(item.path);
+      if (parent !== item.real) throw new Error('path changed since scan — rescan first');
+    }
+    return [...item.paths, ...(item.extraDelete || [])];
+  }
   if (item.deleteMode === 'contents') {
     // re-assert right before the readdir that the dir wasn't swapped for a
     // symlink after validation (TOCTOU on the contents enumeration)
@@ -481,20 +603,41 @@ async function listDeleteTargets(item) {
   return [item.path, ...(item.extraDelete || [])];
 }
 
+// One unusable target must not abandon the rest of a multi-target delete —
+// emptying the Trash is a single row covering everything inside it, and a
+// locked or in-use entry used to leave the job half done. Failures are
+// collected and rethrown AFTER the loop rather than swallowed: runDelete
+// credits the row's full byte count and marks it deleted whenever the delete
+// function returns without throwing, so swallowing would report a fully
+// cleaned row for a partially cleaned directory.
+function reportPartial(failures, total) {
+  if (!failures.length) return;
+  const first = friendlyError(failures[0].error);
+  throw new Error(failures.length === total
+    ? first
+    : `${failures.length} of ${total} items could not be removed — first: ${first}`);
+}
+
 async function permanentDelete(item) {
   const targets = await listDeleteTargets(item);
+  const failures = [];
   for (const t of targets) {
-    validateDeletablePath(t);
     try {
-      await fsp.rm(t, { recursive: true, force: true, maxRetries: 2 });
-    } catch (e) {
-      if (e.code === 'EACCES' || e.code === 'EPERM') {
-        // read-only trees (Go module cache): make writable, retry once
-        await new Promise((res) => execFile('/bin/chmod', ['-R', 'u+w', t], { timeout: 120000 }, () => res()));
+      validateDeletablePath(t);
+      try {
         await fsp.rm(t, { recursive: true, force: true, maxRetries: 2 });
-      } else throw e;
+      } catch (e) {
+        if (e.code === 'EACCES' || e.code === 'EPERM') {
+          // read-only trees (Go module cache): make writable, retry once
+          await new Promise((res) => execFile('/bin/chmod', ['-R', 'u+w', t], { timeout: 120000 }, () => res()));
+          await fsp.rm(t, { recursive: true, force: true, maxRetries: 2 });
+        } else throw e;
+      }
+    } catch (error) {
+      failures.push({ t, error });
     }
   }
+  reportPartial(failures, targets.length);
 }
 
 let trashSeq = 0;
@@ -503,32 +646,38 @@ const trashReserved = new Set(); // dest names claimed by in-flight jobs
 async function moveToTrash(item) {
   const trash = path.join(HOME, '.Trash');
   const targets = await listDeleteTargets(item);
+  const failures = [];
   for (const t of targets) {
-    validateDeletablePath(t);
-    // Two concurrent jobs trashing files with the same basename must never
-    // resolve the same dest — rename over an existing file is a silent
-    // overwrite. Reservation is SYNCHRONOUS (no await between check and add)
-    // so concurrent jobs can't both claim the base name; the per-boot seq
-    // suffix is unique, so only the base name needs an on-disk check.
-    const reserve = () => {
-      let d = path.join(trash, path.basename(t));
-      if (trashReserved.has(d)) d = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
-      trashReserved.add(d);
-      return d;
-    };
-    let dest = reserve();
-    try { await fsp.access(dest); dest = reserve(); } catch { /* free */ }
     try {
-      await fsp.rename(t, dest);
-    } catch (e) {
-      if (e.code === 'EXDEV') throw new Error('different volume — use permanent delete for this item');
-      if (e.code === 'ENOTEMPTY' || e.code === 'EEXIST') {
-        const retry = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
-        trashReserved.add(retry);
-        await fsp.rename(t, retry);
-      } else throw e;
+      validateDeletablePath(t);
+      // Two concurrent jobs trashing files with the same basename must never
+      // resolve the same dest — rename over an existing file is a silent
+      // overwrite. Reservation is SYNCHRONOUS (no await between check and add)
+      // so concurrent jobs can't both claim the base name; the per-boot seq
+      // suffix is unique, so only the base name needs an on-disk check.
+      const reserve = () => {
+        let d = path.join(trash, path.basename(t));
+        if (trashReserved.has(d)) d = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
+        trashReserved.add(d);
+        return d;
+      };
+      let dest = reserve();
+      try { await fsp.access(dest); dest = reserve(); } catch { /* free */ }
+      try {
+        await fsp.rename(t, dest);
+      } catch (e) {
+        if (e.code === 'EXDEV') throw new Error('different volume — use permanent delete for this item');
+        if (e.code === 'ENOTEMPTY' || e.code === 'EEXIST') {
+          const retry = path.join(trash, `${path.basename(t)} ${Date.now()}-${++trashSeq}`);
+          trashReserved.add(retry);
+          await fsp.rename(t, retry);
+        } else throw e;
+      }
+    } catch (error) {
+      failures.push({ t, error });
     }
   }
+  reportPartial(failures, targets.length);
 }
 
 function friendlyError(e) {
@@ -545,6 +694,45 @@ const STATIC = {
   '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
 };
+
+// 'unsafe-inline' in style-src is REQUIRED as written: public/app.js injects
+// style= attributes through innerHTML for the disk-legend swatches and one
+// button. Drop it only after moving those into style.css classes.
+// img-src data: is required for the inline favicon.
+const SECURITY_HEADERS = {
+  'x-frame-options': 'DENY',
+  'content-security-policy': [
+    "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:", "connect-src 'self'", "object-src 'none'",
+    "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'",
+  ].join('; '),
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+};
+
+const eqToken = (v) => {
+  if (typeof v !== 'string' || v.length !== TOKEN.length) return false;
+  try { return crypto.timingSafeEqual(Buffer.from(v), Buffer.from(TOKEN)); } catch { return false; }
+};
+
+// Every entry point, not just POST. GET / used to hand the live token to any
+// local caller with no check at all, and GET /api/state the entire file
+// inventory — so a sandboxed app holding only network.client, or a different
+// UID on a shared Mac, could scrape the token and issue a permanent delete.
+// The cookie is what keeps EventSource working: it cannot send headers.
+function readCookie(req, name) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return v.join('=');
+  }
+  return null;
+}
+
+function authed(req, url) {
+  return eqToken(req.headers['x-token']) || eqToken(url.searchParams.get('t')) || eqToken(readCookie(req, 'mc'));
+}
 
 function hostOk(req) {
   const host = String(req.headers.host || '');
@@ -584,9 +772,40 @@ function json(res, code, obj) {
 // system's own Quick Look generator, so whatever Finder can preview, we can.
 // Only paths the scanner itself registered are ever passed to qlmanage, the
 // request is token-gated, and results are cached per (path, mtime, size).
-const THUMB_DIR = path.join(os.tmpdir(), `mac-cleaner-thumbs-${BOOT_ID}`);
+// A per-boot directory under os.tmpdir() was created with the default mode,
+// never removed by anything (SIGTERM runs no JS), and cold on every launch, so
+// qlmanage re-rendered yesterday's previews into a new world-readable folder
+// each time. A stable private one is correct because the cache key already
+// includes path+mtime+size+px. NOT os.tmpdir() without the random suffix: with
+// TMPDIR unset Node falls back to world-writable /tmp, where a predictable
+// name lets another local user pre-create the directory and read Quick Look
+// renders of this user's private photos.
+const THUMB_DIR = path.join(HOME, 'Library/Caches/mac-cleaner/thumbs');
+const THUMB_BUDGET_BYTES = 256 * 1024 * 1024;
+
+function pruneThumbs() {
+  try {
+    fs.mkdirSync(THUMB_DIR, { recursive: true, mode: 0o700 });
+    const files = fs.readdirSync(THUMB_DIR)
+      .map((n) => {
+        const f = path.join(THUMB_DIR, n);
+        try { return { f, n, st: fs.statSync(f) }; } catch { return null; }
+      })
+      .filter(Boolean);
+    // work dirs from a previous run that was killed mid-render
+    for (const x of files) if (x.n.startsWith('w-')) { fs.rmSync(x.f, { recursive: true, force: true }); }
+    const pngs = files.filter((x) => x.n.endsWith('.png')).sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+    let total = 0;
+    for (const x of pngs) {
+      total += x.st.size;
+      if (total > THUMB_BUDGET_BYTES) { try { fs.rmSync(x.f, { force: true }); } catch {} }
+    }
+  } catch {}
+}
+pruneThumbs();
 const THUMB_GROUPS = new Set(['duplicates', 'large', 'installers', 'binaries', 'personal']);
 const thumbInFlight = new Map(); // cacheKey -> Promise<string|null>
+const thumbFailed = new Set();   // cacheKeys with no Quick Look generator
 
 function thumbTarget(item) {
   // kind 'files' rows preview their first file; directories have no preview
@@ -600,6 +819,9 @@ async function makeThumb(target, px) {
   const key = crypto.createHash('sha1').update(`${target}|${st.mtimeMs}|${st.size}|${px}`).digest('hex');
   const cached = path.join(THUMB_DIR, key + '.png');
   try { await fsp.access(cached); return cached; } catch {}
+  // Keyed on the content hash, not the path: a re-encoded file gets a new key
+  // and is retried, while an unpreviewable one is asked about exactly once.
+  if (thumbFailed.has(key)) return null;
   if (thumbInFlight.has(key)) return thumbInFlight.get(key);
   const p = (async () => {
     // qlmanage writes "<basename>.png" into the output dir — render into a
@@ -608,7 +830,7 @@ async function makeThumb(target, px) {
     await fsp.mkdir(work, { recursive: true });
     const ok = await new Promise((resolve) => {
       execFile('/usr/bin/qlmanage', ['-t', '-s', String(px), '-o', work, target],
-        { timeout: 10000 }, (err) => resolve(!err));
+        { timeout: 3000 }, (err) => resolve(!err));
     });
     let out = null;
     if (ok) {
@@ -616,6 +838,10 @@ async function makeThumb(target, px) {
       if (made) { await fsp.rename(path.join(work, made), cached); out = cached; }
     }
     await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
+    if (!out) {
+      if (thumbFailed.size > 5000) thumbFailed.clear();
+      thumbFailed.add(key);
+    }
     return out;
   })().finally(() => thumbInFlight.delete(key));
   thumbInFlight.set(key, p);
@@ -629,10 +855,32 @@ const server = http.createServer(async (req, res) => {
   // ---- static ----
   if (req.method === 'GET' && STATIC[url.pathname]) {
     const s = STATIC[url.pathname];
+    // The page carries the live token in its DOM and its own buttons perform
+    // the deletes, so framing it cross-origin satisfies hostOk, originOk and
+    // the x-token gate with the victim's own clicks. Nothing was stopping
+    // that: no CSP, no meta-CSP, no frame-busting anywhere.
+    if (!authed(req, url)) { json(res, 403, { error: 'forbidden' }); return; }
+    // Arrived with the token in the query string: hand back a cookie and
+    // bounce to the bare path, so the token is not left in the address bar,
+    // in history, or in a Referer.
+    // Unconditional on an existing cookie. Every restart mints a new token, so
+    // a browser still holding the previous one would otherwise be served the
+    // page (the query string authenticates it) and then get 403 for style.css
+    // and app.js, which carry only the stale cookie — a blank page.
+    if (s.token && url.searchParams.get('t')) {
+      res.writeHead(302, {
+        ...SECURITY_HEADERS,
+        'set-cookie': `mc=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
+        'location': '/',
+        'cache-control': 'no-store',
+      });
+      res.end();
+      return;
+    }
     try {
       let body = await fsp.readFile(path.join(PUB, s.file), 'utf8');
       if (s.token) body = body.replace('__TOKEN__', TOKEN);
-      res.writeHead(200, { 'content-type': s.type, 'cache-control': 'no-store' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': s.type, 'cache-control': 'no-store' });
       res.end(body);
     } catch { json(res, 500, { error: 'missing asset' }); }
     return;
@@ -640,6 +888,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---- SSE ----
   if (req.method === 'GET' && url.pathname === '/api/events') {
+    if (!authed(req, url)) { json(res, 403, { error: 'forbidden' }); return; }
     res.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-store',
@@ -649,17 +898,20 @@ const server = http.createServer(async (req, res) => {
     sseClients.add(res);
     sseSend(res, 'hello', snapshot());
     req.on('close', () => sseClients.delete(res));
+    // the try/catch around write() only catches synchronous throws
+    res.on('error', () => sseClients.delete(res));
     return;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/state') {
+    if (!authed(req, url)) { json(res, 403, { error: 'forbidden' }); return; }
     json(res, 200, snapshot());
     return;
   }
 
   // ---- thumbnails (token in query — <img> tags cannot send headers) ----
   if (req.method === 'GET' && url.pathname === '/api/thumb') {
-    if (url.searchParams.get('t') !== TOKEN) { json(res, 403, { error: 'bad token' }); return; }
+    if (!authed(req, url)) { json(res, 403, { error: 'bad token' }); return; }
     const item = scanner.items.get(String(url.searchParams.get('id') || ''));
     const target = item && THUMB_GROUPS.has(item.group) ? thumbTarget(item) : null;
     if (!target) { json(res, 404, { error: 'no preview' }); return; }
@@ -676,7 +928,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---- POSTs (token-gated) ----
   if (req.method === 'POST') {
-    if (req.headers['x-token'] !== TOKEN) { json(res, 403, { error: 'bad token' }); return; }
+    if (!authed(req, url)) { json(res, 403, { error: 'bad token' }); return; }
     let body;
     try { body = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return; }
 
@@ -686,8 +938,10 @@ const server = http.createServer(async (req, res) => {
         // set of items — a cache that regenerated and is cleaned again must
         // count again
         deletedReals.length = 0;
+        thumbFailed.clear();
         scanner.startScan();
         refreshDisk();
+        probeFdaNow();
         broadcast('fda', { granted: fdaGranted() });
         json(res, 200, { ok: true });
         return;
@@ -697,6 +951,7 @@ const server = http.createServer(async (req, res) => {
       case '/api/settings/fda':
         // deep-link to System Settings → Privacy & Security → Full Disk Access
         execFile('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'], { timeout: 5000 }, () => {});
+        probeFdaNow();
         json(res, 200, { ok: true });
         return;
       case '/api/scan/cancel':
@@ -729,10 +984,24 @@ const server = http.createServer(async (req, res) => {
   json(res, 404, { error: 'not found' });
 });
 
+// applicationWillTerminate is the ONLY thing that stopped this process, and it
+// never runs on SIGKILL or a wrapper crash. Force-quitting the app because the
+// UI stopped responding mid-clean left pumpDeletes draining the queue to
+// completion, with Full Disk Access, after the window was gone — and the port
+// stayed bound with a live token until reboot. ppid === 1 is the reliable
+// orphan signal on macOS and cannot be fooled by PID reuse. Gated on APP_MODE
+// so ./run.sh and CI, which are legitimately parented elsewhere, are unaffected.
+if (process.env.APP_MODE === '1') {
+  setInterval(() => {
+    if (process.ppid === 1) { try { scanner.cancelScan(); } catch {} process.exit(0); }
+  }, 2000).unref();
+}
+
 refreshDisk();
 server.listen(PORT, '127.0.0.1', () => {
   boundPort = server.address().port;
   console.log(`LISTENING ${boundPort}`);
-  console.log(`Mac Cleaner dashboard → http://127.0.0.1:${boundPort}`);
+  console.log(`TOKEN ${TOKEN}`);
+  console.log(`Mac Cleaner dashboard → http://127.0.0.1:${boundPort}/?t=${TOKEN}`);
   console.log(`Grant Full Disk Access to your terminal for complete results.`);
 });

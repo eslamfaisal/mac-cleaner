@@ -2,12 +2,17 @@
    dark surface #1a1a19, page #0d0d0d, categorical dark slots, status colors. */
 
 :root {
+  /* Without this WebKit renders every native control in LIGHT appearance on a
+     dark page: unchecked checkboxes are opaque light-grey squares on dark rows
+     and disabled ones look identical to enabled. One declaration fixes
+     checkbox, radio, select and scrollbar together. */
+  color-scheme: dark;
   --page: #0d0d0d;
   --surface: #1a1a19;
   --surface-2: #232322;
   --ink: #ffffff;
   --ink-2: #c3c2b7;
-  --ink-3: #898781;
+  --ink-3: #9a988f;   /* 6.02:1 on page, 5.44 on surface, 4.84 on a hovered row */
   --grid: #2c2c2a;
   --border: rgba(255, 255, 255, 0.10);
   --accent: #3987e5;
@@ -18,7 +23,13 @@
   /* status */
   --safe: #0ca30c;
   --caution: #fab219;
+  /* --risky is a FILL colour: white on it is 4.80:1 and passes. As TEXT it was
+     3.62:1 on the surface and 3.27:1 on a hovered row — the tier that carries
+     the most consequence was the least readable one on the page, while caution
+     sat at 9.49. --risky-text is the same hue at 5.59 / 5.04. */
   --risky: #d03b3b;
+  --risky-text: #e96a6a;
+  --accent-text: #4f97ea;   /* 5.76 / 5.20, for accent used as text rather than fill */
   --serious: #ec835a;
 }
 
@@ -38,7 +49,13 @@ h1, h2 { font-weight: 650; }
 /* ---------- top bar ---------- */
 .topbar {
   position: sticky; top: 0; z-index: 30;
-  display: flex; align-items: center; gap: 16px;
+  /* Wrapping lived only in the <=760px block, but every child here is
+     non-compressible and they sum to ~1065px in Developer mode (~810 in
+     Normal), while the window minSize is 720 — so half-screen tiling landed in
+     a band with a ragged bar and a document-level horizontal scrollbar. A
+     fixed breakpoint cannot serve both modes; letting it wrap on overflow
+     does. */
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap; row-gap: 8px;
   padding: 10px 20px;
   background: color-mix(in srgb, var(--page) 88%, transparent);
   backdrop-filter: blur(10px);
@@ -48,7 +65,10 @@ h1, h2 { font-weight: 650; }
 .brand .ver { font-size: 11px; font-weight: 500; }
 .brand-icon { font-size: 20px; }
 
-.disk { flex: 1; max-width: 420px; min-width: 180px; }
+.disk { flex: 1; max-width: 420px; min-width: 180px; order: 10; }
+/* when the bar does wrap, the gauge takes the new row rather than stranding a
+   button on its own */
+@media (max-width: 1100px) { .topbar > .disk { min-width: 100%; } }
 .disk-bar { position: relative; height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
 .disk-used { position: absolute; inset: 0 auto 0 0; background: var(--ink-3); border-radius: 4px; width: 0; transition: width .5s; }
 .disk-clean { position: absolute; top: 0; bottom: 0; background: var(--accent); width: 0; transition: width .5s, left .5s; }
@@ -67,8 +87,8 @@ h1, h2 { font-weight: 650; }
   padding: 7px 14px; cursor: pointer; white-space: nowrap;
 }
 .btn:hover { background: var(--grid); }
-.btn-primary { background: var(--accent); border-color: transparent; font-weight: 650; }
-.btn-primary:hover { background: #2a78d6; }
+.btn-primary { background: var(--accent); border-color: transparent; font-weight: 650; color: var(--page); }
+.btn-primary:hover { background: #4a93ea; }   /* lighter, not darker: 6.16:1 */
 .btn-danger { background: var(--risky); border-color: transparent; font-weight: 650; }
 .btn-danger:hover { background: #b83434; }
 .btn-danger:disabled { opacity: .45; cursor: not-allowed; }
@@ -161,12 +181,12 @@ button.tile:hover { background: var(--surface-2); }
 .group-header .g-count { color: var(--ink-3); font-size: 12px; }
 .group-header .g-hidden { color: var(--ink-3); font-size: 11.5px; }
 .group-header .g-hidden.clickable { cursor: pointer; text-decoration: underline dotted; }
-.group-header .g-hidden.clickable:hover { color: var(--accent); }
+.group-header .g-hidden.clickable:hover { color: var(--accent-text); }
 .group-header .g-safety { margin-left: auto; display: inline-flex; gap: 10px; font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .gs { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .gs-safe { color: var(--safe); }
 .gs-caution { color: var(--caution); }
-.gs-risky { color: var(--risky); }
+.gs-risky { color: var(--risky-text); }
 .group-header .g-size { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 74px; text-align: right; }
 .group-header input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
 
@@ -180,6 +200,8 @@ button.tile:hover { background: var(--surface-2); }
 }
 .row:hover { background: var(--surface-2); }
 .row input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+.row input[type="checkbox"]:disabled,
+.group-header input[type="checkbox"]:disabled { opacity: .35; cursor: not-allowed; }
 .row .r-main { min-width: 0; }
 .row .r-name { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .row .r-name .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 90px; }
@@ -199,8 +221,8 @@ button.tile:hover { background: var(--surface-2); }
 }
 .badge-safety-safe { color: var(--safe); border-color: color-mix(in srgb, var(--safe) 50%, transparent); }
 .badge-safety-caution { color: var(--caution); border-color: color-mix(in srgb, var(--caution) 50%, transparent); }
-.badge-safety-risky { color: var(--risky); border-color: color-mix(in srgb, var(--risky) 55%, transparent); font-weight: 600; }
-.badge-info { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.badge-safety-risky { color: var(--risky-text); border-color: color-mix(in srgb, var(--risky) 55%, transparent); font-weight: 600; }
+.badge-info { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .badge-needs { color: var(--serious); border-color: color-mix(in srgb, var(--serious) 50%, transparent); }
 
 .row.status-scanning .r-size { color: var(--ink-3); animation: pulse 1.2s ease-in-out infinite; }
@@ -398,7 +420,7 @@ body.mode-normal .card-advanced .card-size { font-size: 20px; }
 .modal-list .m-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal-list .m-size { font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .modal-risky { margin-top: 10px; }
-.risky-warn { font-size: 12.5px; color: var(--risky); margin-bottom: 6px; }
+.risky-warn { font-size: 12.5px; color: var(--risky-text); margin-bottom: 6px; }
 .ack { display: flex; gap: 8px; align-items: center; font-size: 12.5px; margin-top: 8px; color: var(--ink-2); cursor: pointer; }
 .ack input { accent-color: var(--risky); }
 .modal-total { font-weight: 700; margin: 12px 0; font-variant-numeric: tabular-nums; }
@@ -436,7 +458,7 @@ body.mode-normal .card-advanced .card-size { font-size: 20px; }
   direction: rtl; text-align: left;   /* long paths keep their TAIL visible — the file name matters most */
   cursor: pointer; margin-top: 2px; max-width: 100%;
 }
-.r-loc:hover { color: var(--accent); text-decoration: underline; }
+.r-loc:hover { color: var(--accent-text); text-decoration: underline; }
 
 .modal-list .m-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .modal-list .m-path {
@@ -486,3 +508,14 @@ body.mode-normal .card-advanced .card-size { font-size: 20px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   direction: rtl; text-align: left;
 }
+
+/* visually hidden, still announced */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.toast-close {
+  background: transparent; border: 0; cursor: pointer; color: inherit;
+  margin-left: 10px; font-size: 12px; opacity: .7;
+}
+.toast-close:hover { opacity: 1; }

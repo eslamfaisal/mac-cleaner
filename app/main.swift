@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     var webView: WKWebView!
     var server: Process?
     var loaded = false
+    var didFail = false
+    var port: Int?
+    var token: String?
 
     // ---- node discovery: bundled runtime first, Homebrew/system fallbacks --
 
@@ -34,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
 
     func fail(_ message: String) {
+        if didFail { return }
+        didFail = true
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "Mac Cleaner could not start"
@@ -73,16 +78,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         var buffer = ""
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let self, !self.loaded else { return }
-            guard let chunk = String(data: handle.availableData, encoding: .utf8), !chunk.isEmpty else { return }
+            let data = handle.availableData
+            // EOF. String(data: Data(), encoding: .utf8) is "", not nil, so the
+            // old guard fell through without clearing the handler and the read
+            // source re-fired in a tight loop, pinning a core until the alert
+            // was dismissed. Reachable whenever node exits before it is ready.
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                DispatchQueue.main.async { self.fail("The local server exited before it was ready.") }
+                return
+            }
+            // a partial UTF-8 codepoint split across reads is not a failure —
+            // keep the handler installed and wait for the rest
+            guard let chunk = String(data: data, encoding: .utf8) else { return }
             buffer += chunk
             for line in buffer.split(separator: "\n") {
                 let parts = line.split(separator: " ")
-                if parts.count == 2, parts[0] == "LISTENING", let port = Int(parts[1]) {
-                    self.loaded = true
-                    out.fileHandleForReading.readabilityHandler = nil
-                    DispatchQueue.main.async { self.load(port: port) }
-                    return
-                }
+                guard parts.count == 2 else { continue }
+                if parts[0] == "TOKEN" { self.token = String(parts[1]) }
+                if parts[0] == "LISTENING", let p = Int(parts[1]) { self.port = p }
+            }
+            // both lines are needed: the server no longer serves the page to an
+            // unauthenticated caller
+            if let port = self.port, let token = self.token {
+                self.loaded = true
+                handle.readabilityHandler = nil
+                DispatchQueue.main.async { self.load(port: port, token: token) }
             }
         }
 
@@ -134,8 +155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func load(port: Int) {
-        webView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
+    // The one-shot ?t= hands back a cookie and redirects to "/", so the
+    // committed URL stays "/" and the relaunch flow below is unaffected.
+    func load(port: Int, token: String) {
+        webView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/?t=\(token)")!))
     }
 
     // Launch a fresh copy, then exit this one. The new process starts with
@@ -153,7 +176,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
-        server?.terminate()   // SIGTERM; node exits promptly
+        guard let proc = server, proc.isRunning else { return }
+        proc.terminate()   // SIGTERM; node exits promptly
+        // ...and if it does not, do not leave a Full-Disk-Access process
+        // holding the port. The server's own ppid watchdog is the backstop for
+        // the case this handler never runs at all.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+            if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+        }
     }
 }
 

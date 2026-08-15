@@ -44,29 +44,73 @@ case "$ARCH" in universal|arm64|x64|all) ;; *) echo "error: --arch must be unive
 # ---------------------------------------------------------------- node fetch
 # Official standalone builds from nodejs.org are fully portable (no Homebrew
 # dylibs). Cached in .node-cache/.
+# The runtime bundled here is re-signed with the maintainer's Developer ID,
+# notarized, stapled, and then runs with Full Disk Access and deletes files.
+# An unverified download would make a poisoned mirror or a MITM on the build
+# host into a binary Gatekeeper fully trusts. nodejs.org already ships bin/node
+# signed by Node.js Foundation (Team ID HX7739G8FX) and notarized — but lipo
+# strips that signature before codesign --force replaces it, so it has to be
+# checked HERE, on the exact bytes about to be re-signed.
+NODE_TEAM_ID=HX7739G8FX
+
+verify_node() { # $1 = path to a node binary; aborts the build if not authentic
+  local bin="$1"
+  echo "==> verifying $bin against Apple's notarization records" >&2
+  codesign --verify --strict "$bin" 2>/dev/null \
+    || { echo "FATAL: $bin has no valid signature — refusing to bundle it" >&2; exit 1; }
+  # --strict above proves the bytes are intact; this proves WHOSE they are.
+  # Deliberately not `spctl -a -t exec`: that assesses app bundles and rejects
+  # a bare executable with "the code is valid but does not seem to be an app",
+  # which would abort every build. The anchor + Team ID requirement is the
+  # check that actually distinguishes the official binary from a swapped one.
+  codesign -v -R "=anchor apple generic and certificate leaf[subject.OU] = $NODE_TEAM_ID" "$bin" 2>/dev/null \
+    || { echo "FATAL: $bin is not signed by Node.js Foundation ($NODE_TEAM_ID) — refusing to bundle it" >&2; exit 1; }
+  echo "    node signature ok (Node.js Foundation, Apple-anchored)" >&2
+}
+
 fetch_node() { # $1 = darwin-arm64 | darwin-x64  → prints path to node binary
   local dist_arch="$1"
   local cache=".node-cache/node-$NODE_DIST_VERSION-$dist_arch"
   if [ ! -x "$cache/bin/node" ]; then
     echo "==> fetching official Node $NODE_DIST_VERSION ($dist_arch) from nodejs.org" >&2
     mkdir -p .node-cache
-    curl -fL --proto '=https' "https://nodejs.org/dist/$NODE_DIST_VERSION/node-$NODE_DIST_VERSION-$dist_arch.tar.xz" \
-      | tar -xJ -C .node-cache
+    # to a file, not a pipe: a truncated stream must fail here rather than
+    # leave a half-extracted tree behind. --proto-redir because --proto
+    # constrains only the first request, not what a redirect points at.
+    local tmp; tmp="$(mktemp -t node-dist)"
+    curl -fL --proto '=https' --proto-redir '=https' \
+      "https://nodejs.org/dist/$NODE_DIST_VERSION/node-$NODE_DIST_VERSION-$dist_arch.tar.xz" -o "$tmp" \
+      || { rm -f "$tmp"; echo "FATAL: could not download Node $NODE_DIST_VERSION ($dist_arch)" >&2; exit 1; }
+    tar -xJf "$tmp" -C .node-cache || { rm -f "$tmp"; echo "FATAL: could not extract the Node tarball" >&2; exit 1; }
+    rm -f "$tmp"
   fi
+  # OUTSIDE the cache check on purpose: a binary cached by an earlier build
+  # (or a partial extract) is re-verified on every build, not trusted forever.
+  verify_node "$cache/bin/node"
   echo "$cache/bin/node"
 }
 
 # A user-supplied NODE_BIN is only usable if self-contained (Homebrew's node
 # links dylibs from the Cellar that don't exist on end-user machines).
-portable_node_or_empty() {
+portable_node_or_empty() { # $1 = required arch (arm64 | x86_64)
+  local want="$1"
   local bin="${NODE_BIN:-}"
   [ -n "$bin" ] && [ -x "$bin" ] || { echo ""; return; }
   local resolved; resolved="$(readlink -f "$bin")"
   if otool -L "$resolved" | tail -n +2 | grep -qE '@rpath|/opt/homebrew|/usr/local/(Cellar|opt)'; then
     echo ""
-  else
-    echo "$bin"
+    return
   fi
+  # An explicit NODE_BIN of the wrong architecture is a mistake, not a reason
+  # to quietly download a different runtime: --arch all with an arm64 NODE_BIN
+  # used to ship an arm64 binary inside the Intel DMG. The wrapper is the right
+  # arch so the app launches, node dies with "Bad CPU type", and the user gets
+  # the 15-second timeout alert.
+  if ! lipo -archs "$resolved" | tr ' ' '\n' | grep -qx "$want"; then
+    echo "FATAL: NODE_BIN ($bin) has no $want slice (has: $(lipo -archs "$resolved"))" >&2
+    exit 1
+  fi
+  echo "$bin"
 }
 
 # ---------------------------------------------------------------- build one app
@@ -127,7 +171,8 @@ build_app() { # $1 = universal | arm64 | x64
       lipo -create "$n_arm" "$n_x64" -output "$app/Contents/Resources/node"
       ;;
     arm64|x64)
-      local node_bin; node_bin="$(portable_node_or_empty)"
+      local want; [ "$arch" = arm64 ] && want=arm64 || want=x86_64
+      local node_bin; node_bin="$(portable_node_or_empty "$want")"
       if [ -z "$node_bin" ]; then
         [ "$arch" = arm64 ] && node_bin="$(fetch_node darwin-arm64)" || node_bin="$(fetch_node darwin-x64)"
       fi
@@ -135,8 +180,18 @@ build_app() { # $1 = universal | arm64 | x64
       ;;
   esac
   chmod 755 "$app/Contents/Resources/node"
-  echo "    node slices: $(lipo -archs "$app/Contents/Resources/node")"
-  echo "    app  slices: $(lipo -archs "$app/Contents/MacOS/Mac Cleaner")"
+  # Assert rather than report. Arch-source-agnostic, so it also covers the
+  # universal branch and anything added later: every slice the wrapper has must
+  # exist in the runtime, or the DMG launches and then dies on "Bad CPU type".
+  local node_slices app_slices
+  node_slices="$(lipo -archs "$app/Contents/Resources/node")"
+  app_slices="$(lipo -archs "$app/Contents/MacOS/Mac Cleaner")"
+  echo "    node slices: $node_slices"
+  echo "    app  slices: $app_slices"
+  for a in $app_slices; do
+    echo "$node_slices" | tr ' ' '\n' | grep -qx "$a" \
+      || { echo "FATAL: wrapper has a $a slice but the bundled node does not ($node_slices)" >&2; exit 1; }
+  done
 
   echo "==> codesign"
   # Sign inside-out: nested code first, bundle last. --deep is deprecated and
@@ -202,5 +257,7 @@ esac
 echo "==> done"
 ls -lh dist/*.dmg
 if [ "$SIGN_ID" = "-" ]; then
-  echo "note: ad-hoc signed — downloaders must right-click → Open the first launch."
+  echo "note: ad-hoc signed. macOS 15+ no longer honours right-click → Open; the"
+  echo "      first launch needs System Settings → Privacy & Security → Open Anyway."
+  echo "      For anything you share, set SIGN_ID and NOTARY_PROFILE instead."
 fi

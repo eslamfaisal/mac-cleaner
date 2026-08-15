@@ -70,7 +70,7 @@ surfaces the **exact terminal command** instead of a fake delete button.
 - 🏠 **Two modes, one scan** — pick **Normal** or **Developer** the first time you open it,
   switch any time from the toolbar. See [Normal mode vs Developer mode](#normal-mode-vs-developer-mode).
 - 🧑‍🔧 **For every Mac user, not just developers** — duplicate-file finder (checksum-verified,
-  always keeps the newest copy), a Biggest Files explorer sorted largest-first across your
+  always keeps one copy), a Biggest Files explorer sorted largest-first across your
   whole home folder including Movies/Music/Pictures, screenshots piling up on the Desktop,
   and Downloads you haven't touched in months.
 - 🗂️ **CleanMyMac-style overview** — a card per category with total size, item count and a
@@ -127,7 +127,7 @@ of every future scan until you restore it from the "kept" chip.
 **Duplicate files** are matched by content, never by name: same byte size, then a sampled
 SHA-1 of the head, middle and tail. Sets show a Quick Look thumbnail (click for a bigger
 preview), say what deleting the extras would free, and always keep one copy — the set
-checkbox skips the newest file and the server refuses any request that would remove every
+checkbox skips the suggested keeper and the server refuses any request that would remove every
 copy of a set.
 
 ## Which download? Apple Silicon vs Intel
@@ -236,7 +236,7 @@ after enabling, quit and relaunch (the grant applies to newly started processes)
 |---|
 | ![Leftovers from uninstalled apps view](docs/screens/detail-leftovers.png) |
 
-| Duplicate sets — keeps the newest copy |
+| Duplicate sets — keeps one copy |
 |---|
 | ![Duplicate Files detail view](docs/screens/detail-duplicates.png) |
 
@@ -251,7 +251,7 @@ of old/superseded app data and 2.16 GB of leftovers from apps that were uninstal
 |---|---|---|
 | 🗑️ | **Trash** | The system Trash (per-volume) |
 | 🐋 | **Biggest Files** | Every file ≥ 50 MB across your home folder — including Movies, Music and Pictures — sorted largest-first. Media libraries shown read-only. |
-| 👯 | **Duplicate Files** | Identical files from 1 MB up (same size + head/middle/tail checksum) clustered into sets, with a thumbnail preview; one click selects every copy except the newest |
+| 👯 | **Duplicate Files** | Identical files from 1 MB up (same size + head/middle/tail checksum) clustered into sets, with a thumbnail preview; one click selects every copy except the suggested keeper. Before anything is deleted the whole content is read and compared, so a sampled match can never cost you a file |
 | 🏠 | **Personal & Media** | Screenshots on the Desktop, Downloads untouched for 90+ days, Mail attachment copies, Mail's downloaded messages (read-only), Podcast/Books downloads, screensaver videos macOS downloads in the background |
 | ☁️ | **Cloud files kept on disk** | iCloud Drive, Dropbox, OneDrive and Google Drive mirrors under `~/Library/Mobile Documents` and `~/Library/CloudStorage` — sized read-only, with Finder's "Remove Download" as the safe way to free them |
 | ⏳ | **Applications — Old & Unused** | Apps with no sign of use for 6+ months, duplicate installs of the same app, superseded per-version IDE data (Android Studio / JetBrains), old JetBrains Toolbox builds, forgotten 12 GB macOS installers |
@@ -427,6 +427,11 @@ Connect API* (needs **Admin** access); the issuer UUID is on the same page.
 > blocks such apps on first launch and the old right-click → *Open* shortcut no longer
 > bypasses it (the user has to go to *System Settings → Privacy & Security → Open Anyway*).
 > Anything you hand to other people should be signed and notarized.
+>
+> An ad-hoc signature's designated requirement is its **cdhash**, so every
+> rebuild is a different identity as far as TCC is concerned: **Full Disk Access
+> has to be granted again after each ad-hoc rebuild.** A Developer ID signature
+> keeps the same identity across builds, so the grant sticks.
 
 > **Why it may download Node:** Homebrew's `node` links dylibs from the Cellar
 > (`@rpath/libnode…`) that don't exist on other machines. When the build detects a
@@ -436,7 +441,13 @@ Connect API* (needs **Admin** access); the issuer UUID is on the same page.
 ## Cutting a release
 
 ```sh
-# 1. bump the version
+# 0. re-check the bundled runtime: is NODE_DIST_VERSION in build-app.sh still
+#    the current 22.x LTS patch? Every DMG embeds it, and there is no update
+#    channel, so whatever ships here is what users run until they redownload.
+#    (The build verifies the binary is Apple-anchored and signed by the Node.js
+#    Foundation, so a stale pin is a freshness question, not a trust one.)
+
+# 1. bump the version  (VERSION is the single source — nothing else stores it)
 echo 1.1.1 > VERSION
 
 # 2. build all three DMGs (universal + Apple Silicon + Intel), signed + notarized
