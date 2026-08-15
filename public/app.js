@@ -865,8 +865,8 @@ function clusterRuleFor(gid, items) {
     // group on the content hash, never on the header label: the label rounds
     // sizes, so two unrelated sets of same-named files can print identically
     return { key: (i) => i.dupSet || byProject(i), label: byProject,
-      icon: () => '👯', noun: ['copy', 'copies'], skipNewest: true, thumb: true,
-      aria: 'Select all copies except the newest', title: 'Selects every copy except the newest' };
+      icon: () => '👯', noun: ['copy', 'copies'], skipKeeper: true, thumb: true,
+      aria: 'Select all copies except the suggested keeper', title: 'Selects every copy except the one suggested to keep' };
   }
   // A normal-mode category can merge several technical ones — "System Junk"
   // alone can hold a thousand rows. Once it does, split it back into the
@@ -884,9 +884,9 @@ function clusterRuleFor(gid, items) {
   return null;
 }
 
-// duplicates: the cluster checkbox intentionally skips the newest copy, so
-// "tick the set" reclaims space while always keeping one file
-const clusterSelectable = (i, rule) => selectable(i) && !(rule?.skipNewest && i.dupNewest);
+// duplicates: the cluster checkbox intentionally skips the copy the scan
+// suggests keeping, so "tick the set" reclaims space while always keeping one
+const clusterSelectable = (i, rule) => selectable(i) && !(rule?.skipKeeper && i.dupKeep);
 
 // Floating larger preview for a duplicate set — click the thumbnail to open,
 // click anywhere (or Escape) to close.
@@ -959,8 +959,8 @@ function updateProjectHeader(ph, c) {
   ph.querySelector('.ph-size').textContent = fmtBytes(c.total);
   // duplicates: the number that matters is what deleting the extras frees —
   // the total says how much the set occupies, not what the user gains
-  if (c.rule.skipNewest) {
-    const keeper = c.items.reduce((m, i) => (i.dupNewest ? i : m), null);
+  if (c.rule.skipKeeper) {
+    const keeper = c.items.reduce((m, i) => (i.dupKeep ? i : m), null);
     const waste = Math.max(0, c.total - (keeper ? keeper.bytes : (c.items[0]?.bytes || 0)));
     ph.querySelector('.ph-count').textContent =
       `${fmtCount(c.items.length)} ${c.items.length === 1 ? one : many} · frees ${fmtBytes(waste)} keeping one`;
@@ -1273,7 +1273,7 @@ function openModal(ids) {
   const total = selectionBytes(items);
   // A duplicate set the user is about to wipe entirely: every copy selected,
   // none kept. Worth saying out loud, in the one dialog that can still stop it.
-  // dupNewest is always serialized (as a boolean), so testing it for undefined
+  // dupKeep is always serialized (as a boolean), so testing it for undefined
   // matched every row with a project — including build artifacts, which then
   // triggered a "duplicate set" warning about files that are not duplicates.
   const dupSets = new Map();

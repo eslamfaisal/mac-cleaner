@@ -147,7 +147,7 @@ function publicItem(i) {
     error: i.error || null, mtime: i.mtime || null,
     project: i.project ? (i.project.startsWith(HOME) ? '~' + i.project.slice(HOME.length) : i.project) : null,
     projectName: i.projectName || null,
-    dupNewest: !!i.dupNewest, dupSet: i.dupSet || null,
+    dupKeep: !!i.dupKeep, dupSet: i.dupSet || null,
     noTotal: !!i.noTotal,
   };
 }
@@ -376,6 +376,49 @@ function validateItemForDelete(item) {
 const deleteQueue = [];
 let deleting = 0;
 
+// ------------------------------------------- duplicate verification -------
+// The scan clusters duplicates from a 384 KB sample (head, middle, tail) plus
+// the exact size. That is a filter, not a verdict — cloned VM disks,
+// preallocated database files and .sparsebundle bands can all agree on those
+// three windows and differ in between. So no duplicate is removed until its
+// entire content has been compared, byte for byte, against a copy that will
+// still be there afterwards.
+//
+// Hashes are cached on (path, mtime, size) so the surviving copy of a set is
+// read once per batch rather than once per copy being removed.
+const fullHashCache = new Map();
+
+async function hashAll(paths) {
+  const keyOf = new Map();
+  const need = [];
+  for (const p of paths) {
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    const k = `${p}|${st.mtimeMs}|${st.size}`;
+    keyOf.set(p, k);
+    if (!fullHashCache.has(k)) need.push(p);
+  }
+  if (need.length) {
+    const got = await scanner.fullHashes(need);
+    for (const p of need) fullHashCache.set(keyOf.get(p), got.get(p) ?? null);
+  }
+  const out = new Map();
+  for (const [p, k] of keyOf) out.set(p, fullHashCache.get(k) ?? null);
+  return out;
+}
+
+async function duplicateHasIdenticalSurvivor(item) {
+  if (!item.dupSet) return false;
+  const survivors = [...scanner.items.values()].filter(i =>
+    i.group === 'duplicates' && i.dupSet === item.dupSet && i.id !== item.id &&
+    !['queued', 'deleting', 'deleted', 'gone', 'missing'].includes(i.status));
+  if (!survivors.length) return false;
+  const hashes = await hashAll([item.path, ...survivors.map(s => s.path)]);
+  const mine = hashes.get(item.path);
+  if (!mine) return false;   // unreadable never counts as a match
+  return survivors.some(s => hashes.get(s.path) === mine);
+}
+
 // A duplicate cluster exists to save space while keeping one copy. A batch
 // holding every surviving copy of a set is always a mistake (a stray "select
 // all" reaching rows the UI meant to protect), so the newest copy is held back
@@ -397,8 +440,10 @@ function keepOneOfEachDuplicateSet(ids) {
     // and refusing to delete it would strand the file forever
     if (alive.length < 2) continue;
     if (chosen.length < alive.length) continue; // at least one copy survives
-    // keep the one the scan marked as the suggested keeper, else the newest
-    const keeper = chosen.find(i => i.dupNewest) || chosen[0];
+    // Keep the one the scan marked as the suggested keeper. Fall back to the
+    // same ordering the scan used rather than an arbitrary array position:
+    // `chosen[0]` is whatever order the client happened to send.
+    const keeper = alive.find(i => i.dupKeep) || chosen.find(i => i.dupKeep) || chosen[0];
     held.add(keeper.id);
   }
   return held;
@@ -440,6 +485,19 @@ async function runDelete({ item, mode }) {
       scanner.markDeleted(item.id, false, friendlyError(e));
     }
     return;
+  }
+  // The one check that must happen before the row is committed to deletion:
+  // a sampled match is not proof, and this is the last moment it can be
+  // turned into proof.
+  if (item.group === 'duplicates') {
+    let identical = false;
+    try { identical = await duplicateHasIdenticalSurvivor(item); }
+    catch { identical = false; }
+    if (!identical) {
+      scanner.markDeleted(item.id, false,
+        'Not deleted — reading the whole file showed it is not identical to the copy being kept');
+      return;
+    }
   }
   scanner.markDeleting(item.id);
   try {

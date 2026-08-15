@@ -70,7 +70,7 @@ surfaces the **exact terminal command** instead of a fake delete button.
 - 🏠 **Two modes, one scan** — pick **Normal** or **Developer** the first time you open it,
   switch any time from the toolbar. See [Normal mode vs Developer mode](#normal-mode-vs-developer-mode).
 - 🧑‍🔧 **For every Mac user, not just developers** — duplicate-file finder (checksum-verified,
-  always keeps the newest copy), a Biggest Files explorer sorted largest-first across your
+  always keeps one copy), a Biggest Files explorer sorted largest-first across your
   whole home folder including Movies/Music/Pictures, screenshots piling up on the Desktop,
   and Downloads you haven't touched in months.
 - 🗂️ **CleanMyMac-style overview** — a card per category with total size, item count and a
@@ -127,7 +127,7 @@ of every future scan until you restore it from the "kept" chip.
 **Duplicate files** are matched by content, never by name: same byte size, then a sampled
 SHA-1 of the head, middle and tail. Sets show a Quick Look thumbnail (click for a bigger
 preview), say what deleting the extras would free, and always keep one copy — the set
-checkbox skips the newest file and the server refuses any request that would remove every
+checkbox skips the suggested keeper and the server refuses any request that would remove every
 copy of a set.
 
 ## Which download? Apple Silicon vs Intel
@@ -236,7 +236,7 @@ after enabling, quit and relaunch (the grant applies to newly started processes)
 |---|
 | ![Leftovers from uninstalled apps view](docs/screens/detail-leftovers.png) |
 
-| Duplicate sets — keeps the newest copy |
+| Duplicate sets — keeps one copy |
 |---|
 | ![Duplicate Files detail view](docs/screens/detail-duplicates.png) |
 
@@ -251,7 +251,7 @@ of old/superseded app data and 2.16 GB of leftovers from apps that were uninstal
 |---|---|---|
 | 🗑️ | **Trash** | The system Trash (per-volume) |
 | 🐋 | **Biggest Files** | Every file ≥ 50 MB across your home folder — including Movies, Music and Pictures — sorted largest-first. Media libraries shown read-only. |
-| 👯 | **Duplicate Files** | Identical files from 1 MB up (same size + head/middle/tail checksum) clustered into sets, with a thumbnail preview; one click selects every copy except the newest |
+| 👯 | **Duplicate Files** | Identical files from 1 MB up (same size + head/middle/tail checksum) clustered into sets, with a thumbnail preview; one click selects every copy except the suggested keeper. Before anything is deleted the whole content is read and compared, so a sampled match can never cost you a file |
 | 🏠 | **Personal & Media** | Screenshots on the Desktop, Downloads untouched for 90+ days, Mail attachment copies, Mail's downloaded messages (read-only), Podcast/Books downloads, screensaver videos macOS downloads in the background |
 | ☁️ | **Cloud files kept on disk** | iCloud Drive, Dropbox, OneDrive and Google Drive mirrors under `~/Library/Mobile Documents` and `~/Library/CloudStorage` — sized read-only, with Finder's "Remove Download" as the safe way to free them |
 | ⏳ | **Applications — Old & Unused** | Apps with no sign of use for 6+ months, duplicate installs of the same app, superseded per-version IDE data (Android Studio / JetBrains), old JetBrains Toolbox builds, forgotten 12 GB macOS installers |
