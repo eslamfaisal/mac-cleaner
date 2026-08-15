@@ -95,7 +95,7 @@ surfaces the **exact terminal command** instead of a fake delete button.
 | **Get it** | [Download the `.dmg`](https://github.com/eslamfaisal/mac-cleaner/releases/latest) | `git clone` + `npm start` |
 | **Installs anything?** | No — bundles its own Node | Needs Node.js (built-ins only) |
 | **Full Disk Access** | Granted to **Mac Cleaner** | Granted to your **terminal app** |
-| **Opens at** | Native window | `http://127.0.0.1:4545` |
+| **Opens at** | Native window | the tokenised URL `npm start` prints |
 | **Best for** | Everyday use | Developers / auditing the code |
 
 Both run the identical local server. The app is just a ~180-line Swift `WKWebView` shell —
@@ -365,8 +365,13 @@ Requires Node.js. **No `npm install`** — the app uses built-ins only.
 git clone https://github.com/eslamfaisal/mac-cleaner.git
 cd mac-cleaner
 npm start
-# → http://127.0.0.1:4545
+# → open the URL it prints, e.g. http://127.0.0.1:4545/?t=<token>
 ```
+
+The token is new on every start and is what stops any other local process from
+driving the dashboard — so open the printed URL, not the bare address. Your
+browser swaps it for a cookie on the first load and the address bar goes back
+to `http://127.0.0.1:4545/`.
 
 For complete results, grant **Full Disk Access** to your terminal app (System Settings →
 Privacy & Security → Full Disk Access). The dashboard detects this and offers a one-click
