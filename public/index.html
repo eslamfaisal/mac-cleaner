@@ -60,8 +60,11 @@
 </div>
 
 <div class="progress-row" id="progress-row" hidden>
-  <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
-  <div class="progress-text"><span id="progress-count">0 / 0</span> <span class="walk-dir" id="walk-dir"></span></div>
+  <div class="progress-track" role="progressbar" aria-label="Scan progress" aria-valuemin="0" aria-valuemax="100" id="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  <!-- walk-dir is rewritten per directory; announcing it would be an unusable
+       stream of speech, so the polite region below speaks in 10% steps -->
+  <div class="progress-text"><span id="progress-count">0 / 0</span> <span class="walk-dir" id="walk-dir" aria-hidden="true"></span></div>
+  <div class="sr-only" id="progress-live" aria-live="polite"></div>
 </div>
 
 <div class="onboard" id="fda-card" hidden>

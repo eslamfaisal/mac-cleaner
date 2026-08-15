@@ -11,6 +11,7 @@ function viewFromHash() {
 }
 
 const state = {
+  progressBucket: null,   // last announced 10% step (see renderHeader)
   view: viewFromHash(),
   groups: [],
   normalGroups: [],
@@ -74,6 +75,19 @@ function fmtBytes(n) {
   return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + ' ' + units[i];
 }
 
+// Decimal units, for the ONE place the number is read side by side with
+// macOS: the disk gauge. Finder and System Settings report decimal GB, so the
+// binary figure read ~7% low against the OS on the app's very first number.
+// Item rows stay binary on purpose — their neighbours are du -h and Docker.
+function fmtBytesSI(n) {
+  if (n == null) return '—';
+  if (n < 1000) return n + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1000, i = 0;
+  while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+  return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + ' ' + units[i];
+}
+
 function fmtCount(n) { return n.toLocaleString('en-US'); }
 
 function fmtAge(mtime) {
@@ -116,9 +130,23 @@ async function post(pathname, body) {
 function toast(msg, isErr) {
   const el = document.createElement('div');
   el.className = 'toast' + (isErr ? ' err' : '');
+  // role on the toast itself, not the container: a container role plus child
+  // roles is unreliable across screen readers
+  el.setAttribute('role', isErr ? 'alert' : 'status');
   el.textContent = msg;
   $('#toasts').appendChild(el);
-  setTimeout(() => el.remove(), 5000);
+  // "N items could not be removed" disappearing after five seconds is how a
+  // failed clean goes unnoticed. Failures stay until dismissed.
+  if (isErr) {
+    const close = document.createElement('button');
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.textContent = '✕';
+    close.addEventListener('click', () => el.remove());
+    el.appendChild(close);
+  } else {
+    setTimeout(() => el.remove(), 5000);
+  }
 }
 
 // ---------------------------------------------------------- settings ------
@@ -556,9 +584,21 @@ function renderHeader() {
   if (status === 'scanning') {
     const pct = tasksTotal ? Math.round(tasksDone / tasksTotal * 100) : 0;
     $('#progress-fill').style.width = pct + '%';
-    $('#progress-count').textContent = `${fmtCount(tasksDone)} / ${fmtCount(tasksTotal)} tasks`;
+    $('#progress-track').setAttribute('aria-valuenow', String(pct));
+    setText($('#progress-count'), `${fmtCount(tasksDone)} / ${fmtCount(tasksTotal)} tasks`);
+    // one announcement per 10% rather than one per tick — a minutes-long scan
+    // was otherwise completely silent, and per-tick would be unlistenable
+    const bucket = Math.floor(pct / 10);
+    if (bucket !== state.progressBucket) {
+      state.progressBucket = bucket;
+      $('#progress-live').textContent = `Scanning, ${bucket * 10} percent`;
+    }
   } else {
-    $('#walk-dir').textContent = '';
+    setText($('#walk-dir'), '');
+    if (status === 'done' && state.progressBucket !== null) {
+      state.progressBucket = null;
+      $('#progress-live').textContent = `Scan complete, ${fmtCount(state.items.size)} items found`;
+    }
   }
 
   // Bytes moved to the Trash are not freed yet — labelling them "reclaimed"
@@ -587,8 +627,8 @@ function renderHeader() {
     const cl = $('#disk-clean');
     cl.style.left = (usedPct - cleanPct) + '%';
     cl.style.width = cleanPct + '%';
-    $('#disk-label').textContent =
-      `${fmtBytes(used)} used · ${fmtBytes(state.disk.free)} free · ${fmtBytes(cleanable)} cleanable found`;
+    setText($('#disk-label'),
+      `${fmtBytesSI(used)} used · ${fmtBytesSI(state.disk.free)} free · ${fmtBytes(cleanable)} cleanable found`);
   }
 
   const hasItems = state.items.size > 0;
@@ -1020,6 +1060,38 @@ function updateProjectHeader(ph, c) {
   check.disabled = selectableItems.length === 0;
 }
 
+// The confirm dialog had no focus management at all: focus stayed on the
+// button behind the backdrop, which blocks the mouse but not Tab — so the user
+// could walk the page underneath and untick rows that modalIds had already
+// captured, while the delete still went ahead with the captured set. With
+// focus outside the dialog, aria-modal never engages either, so a VoiceOver
+// user was never told it opened.
+//
+// `inert` does the heavy lifting: it removes the background from the tab order
+// AND the accessibility tree, which closes the modalIds/selection divergence
+// and makes a hand-rolled tab trap unnecessary.
+let lastFocus = null;
+function setModalOpen(open) {
+  const modal = $('#modal');
+  const background = ['main', '.topbar', '#selection-bar'].map(sel => document.querySelector(sel)).filter(Boolean);
+  if (open) {
+    lastFocus = document.activeElement;
+    modal.hidden = false;
+    for (const el of background) el.inert = true;
+    // never the confirm button: the destructive action must not be one
+    // Return keypress away from a dialog the user has not read
+    $('#modal-cancel').focus();
+  } else {
+    modal.hidden = true;
+    for (const el of background) el.inert = false;
+    // finishing a run clears the selection, which hides #sel-clean — so the
+    // element we came from can be gone by now
+    if (lastFocus && document.contains(lastFocus) && lastFocus.offsetParent !== null) lastFocus.focus();
+    else $('#scan-btn')?.focus();
+    lastFocus = null;
+  }
+}
+
 // Items whose Quick Look render failed once; asking again costs a process.
 const noThumb = new Set();
 
@@ -1073,6 +1145,16 @@ function updateRow(row, item, indent) {
   const nameEl = row.querySelector('.r-name');
   const label = displayName(item);
   // state.fda and status feed the badges now, so they must invalidate the cache
+  // Every row checkbox said "Select item" and the three buttons were emoji
+  // only, so the whole list read as an undifferentiated column to a screen
+  // reader. Guarded like the neighbouring writes — this runs at 4 Hz.
+  const rowCheck = row.querySelector('input');
+  if (rowCheck.getAttribute('aria-label') !== 'Select ' + label) {
+    rowCheck.setAttribute('aria-label', 'Select ' + label);
+    row.querySelector('.act-keep').setAttribute('aria-label', 'Keep ' + label);
+    row.querySelector('.act-reveal').setAttribute('aria-label', 'Show ' + label + ' in Finder');
+    row.querySelector('.act-delete').setAttribute('aria-label', 'Delete ' + label);
+  }
   const badgeSig = [item.safety, item.needs || '', state.uiMode, state.fda, item.status, ...(item.badges || [])].join('|');
   if (row.dataset.badgeSig !== badgeSig || nameEl.querySelector('.nm').textContent !== label) {
     row.dataset.badgeSig = badgeSig;
@@ -1193,13 +1275,17 @@ function buildCards() {
   for (const g of activeGroups()) {
     const el = document.createElement('button');
     el.className = 'card' + (g.id === 'n-dev' ? ' card-advanced' : '');
-    el.setAttribute('aria-label', 'Open ' + g.title);
+    // deliberately no aria-label: on a button it REPLACES the accessible name
+    // computed from the contents, so "Open Xcode & iOS" silently dropped
+    // "37.5 GB · 41 items · 1 read-only" — the part that decides whether the
+    // user opens it at all. The icon and chevron are marked decorative below
+    // so the name stays clean.
     el.style.setProperty('--card-accent', groupColor.get(g.id) || 'var(--c-other)');
     el.innerHTML = `
       <div class="card-top">
-        <span class="card-icon">${g.icon}</span>
+        <span class="card-icon" aria-hidden="true">${g.icon}</span>
         <span class="card-title">${g.title}</span>
-        <span class="card-chevron">›</span>
+        <span class="card-chevron" aria-hidden="true">›</span>
       </div>
       <div class="card-size">—</div>
       <div class="card-desc"></div>
@@ -1392,7 +1478,7 @@ function openModal(ids) {
   }
   $('#modal-total').textContent = `${fmtCount(items.length)} items — ${fmtBytes(total)}`;
   updateModalConfirm();
-  $('#modal').hidden = false;
+  setModalOpen(true);
 }
 
 function updateModalConfirm() {
@@ -1402,10 +1488,10 @@ function updateModalConfirm() {
 }
 
 $('#risky-ack').addEventListener('change', updateModalConfirm);
-$('#modal-cancel').addEventListener('click', () => { $('#modal').hidden = true; });
-$('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) $('#modal').hidden = true; });
+$('#modal-cancel').addEventListener('click', () => setModalOpen(false));
+$('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) setModalOpen(false); });
 $('#modal-confirm').addEventListener('click', async () => {
-  $('#modal').hidden = true;
+  setModalOpen(false);
   // items may have changed state while the modal was open — re-filter
   modalIds = modalIds.filter(id => { const i = state.items.get(id); return i && selectable(i); });
   if (!modalIds.length) { toast('Nothing left to clean — items changed while confirming.'); return; }
@@ -1506,7 +1592,7 @@ $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; mark
 $('#detail-back').addEventListener('click', closeGroup);
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !$('#modal').hidden) { $('#modal').hidden = true; return; }
+  if (e.key === 'Escape' && !$('#modal').hidden) { setModalOpen(false); return; }
   if (e.key === 'Escape' && ['group', 'settings'].includes(state.view.name)
       && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) { closeGroup(); return; }
   if (e.key === '/' && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
