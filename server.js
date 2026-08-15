@@ -805,6 +805,7 @@ function pruneThumbs() {
 pruneThumbs();
 const THUMB_GROUPS = new Set(['duplicates', 'large', 'installers', 'binaries', 'personal']);
 const thumbInFlight = new Map(); // cacheKey -> Promise<string|null>
+const thumbFailed = new Set();   // cacheKeys with no Quick Look generator
 
 function thumbTarget(item) {
   // kind 'files' rows preview their first file; directories have no preview
@@ -818,6 +819,9 @@ async function makeThumb(target, px) {
   const key = crypto.createHash('sha1').update(`${target}|${st.mtimeMs}|${st.size}|${px}`).digest('hex');
   const cached = path.join(THUMB_DIR, key + '.png');
   try { await fsp.access(cached); return cached; } catch {}
+  // Keyed on the content hash, not the path: a re-encoded file gets a new key
+  // and is retried, while an unpreviewable one is asked about exactly once.
+  if (thumbFailed.has(key)) return null;
   if (thumbInFlight.has(key)) return thumbInFlight.get(key);
   const p = (async () => {
     // qlmanage writes "<basename>.png" into the output dir — render into a
@@ -826,7 +830,7 @@ async function makeThumb(target, px) {
     await fsp.mkdir(work, { recursive: true });
     const ok = await new Promise((resolve) => {
       execFile('/usr/bin/qlmanage', ['-t', '-s', String(px), '-o', work, target],
-        { timeout: 10000 }, (err) => resolve(!err));
+        { timeout: 3000 }, (err) => resolve(!err));
     });
     let out = null;
     if (ok) {
@@ -834,6 +838,10 @@ async function makeThumb(target, px) {
       if (made) { await fsp.rename(path.join(work, made), cached); out = cached; }
     }
     await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
+    if (!out) {
+      if (thumbFailed.size > 5000) thumbFailed.clear();
+      thumbFailed.add(key);
+    }
     return out;
   })().finally(() => thumbInFlight.delete(key));
   thumbInFlight.set(key, p);
@@ -855,7 +863,11 @@ const server = http.createServer(async (req, res) => {
     // Arrived with the token in the query string: hand back a cookie and
     // bounce to the bare path, so the token is not left in the address bar,
     // in history, or in a Referer.
-    if (s.token && url.searchParams.get('t') && !readCookie(req, 'mc')) {
+    // Unconditional on an existing cookie. Every restart mints a new token, so
+    // a browser still holding the previous one would otherwise be served the
+    // page (the query string authenticates it) and then get 403 for style.css
+    // and app.js, which carry only the stale cookie — a blank page.
+    if (s.token && url.searchParams.get('t')) {
       res.writeHead(302, {
         ...SECURITY_HEADERS,
         'set-cookie': `mc=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
@@ -886,6 +898,8 @@ const server = http.createServer(async (req, res) => {
     sseClients.add(res);
     sseSend(res, 'hello', snapshot());
     req.on('close', () => sseClients.delete(res));
+    // the try/catch around write() only catches synchronous throws
+    res.on('error', () => sseClients.delete(res));
     return;
   }
 
@@ -924,6 +938,7 @@ const server = http.createServer(async (req, res) => {
         // set of items — a cache that regenerated and is cleaned again must
         // count again
         deletedReals.length = 0;
+        thumbFailed.clear();
         scanner.startScan();
         refreshDisk();
         probeFdaNow();

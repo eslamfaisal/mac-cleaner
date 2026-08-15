@@ -213,6 +213,21 @@ function connect() {
     $('#settings-version').textContent = snap.version ? 'v' + snap.version : '';
     state.items = new Map(snap.items.map(i => [i.id, i]));
     for (const id of [...state.selection]) if (!state.items.has(id)) state.selection.delete(id);
+    // A clean that was in flight when the stream dropped — sleep, a throttled
+    // tab, a server restart — had its terminal statuses delivered into the gap.
+    // Without replaying them against the snapshot, run.pending never empties,
+    // finishRun never fires, and the UI says "Cleaning N items…" forever on
+    // the app's core operation. Same accounting as the 'items' handler.
+    if (state.run) {
+      for (const id of [...state.run.pending]) {
+        const item = state.items.get(id);
+        if (!item || !['deleted', 'gone', 'error', 'missing'].includes(item.status)) continue;
+        state.run.pending.delete(id);
+        if (item.status === 'deleted') { state.run.done++; state.run.bytes += item.bytes || 0; }
+        else if (item.status === 'error') state.run.failed++;
+      }
+      if (!state.run.pending.size) finishRun();
+    }
     // one fixed color slot per group id, in both taxonomies
     for (const list of [snap.groups, state.normalGroups]) {
       list.forEach((g, idx) => groupColor.set(g.id, SLOT_COLORS[idx % SLOT_COLORS.length]));
@@ -809,6 +824,18 @@ function renderGroups() {
 
     const cluster = clusterRuleFor(g.id, all);
     if (cluster) {
+      // Index over ALL items of the group, once. updateProjectHeader used to
+      // call clusterItems per header, and each call spread and filtered the
+      // entire item Map — O(clusters x items) every render tick.
+      // Keyed on `all`, not `vis`: the header checkbox's tri-state has to span
+      // items the filter is hiding, or it renders indeterminate forever.
+      const allByKey = new Map();
+      for (const item of all) {
+        if (item.status === 'missing') continue;
+        const key = cluster.key(item);
+        if (!allByKey.has(key)) allByKey.set(key, []);
+        allByKey.get(key).push(item);
+      }
       // cluster by key (project dir / duplicate set / original category)
       const byKey = new Map();
       for (const item of vis) {
@@ -817,13 +844,13 @@ function renderGroups() {
         byKey.get(key).push(item);
       }
       const clusters = [...byKey.entries()]
-        .map(([proj, items]) => ({ proj, items, gid: g.id, rule: cluster, total: items.reduce((s, i) => countable(i) ? s + i.bytes : s, 0) }))
+        .map(([proj, items]) => ({ proj, items, gid: g.id, rule: cluster, all: allByKey.get(proj) || items, total: items.reduce((s, i) => countable(i) ? s + i.bytes : s, 0) }))
         .sort((a, b) => b.total - a.total);
       for (const c of clusters) {
         const phId = 'ph:' + g.id + ':' + c.proj;
         seen.add(phId);
         let ph = rowEls.get(phId);
-        if (!ph) { ph = buildProjectHeader(phId, c.proj, g.id, cluster); rowEls.set(phId, ph); }
+        if (!ph) { ph = buildProjectHeader(phId, c.proj, g.id, cluster, c.all?.[0]); rowEls.set(phId, ph); }
         updateProjectHeader(ph, c);
         place(ph);
         for (const item of sortItems(c.items)) {
@@ -911,7 +938,7 @@ function clusterItems(gid, proj, rule) {
     i.status !== 'missing' && groupOf(i) === gid && rule.key(i) === proj);
 }
 
-function buildProjectHeader(phId, proj, gid, rule) {
+function buildProjectHeader(phId, proj, gid, rule, firstOf) {
   const el = document.createElement('div');
   el.className = 'prow-header';
   el.dataset.id = phId;
@@ -923,17 +950,21 @@ function buildProjectHeader(phId, proj, gid, rule) {
     <span class="ph-size"></span>`;
   el.querySelector('.ph-icon').textContent = rule.icon(proj);
   // the key can be a content hash — show the human label when the rule has one
-  const first = [...state.items.values()].find(i => groupOf(i) === gid && rule.key(i) === proj);
+  const first = firstOf || [...state.items.values()].find(i => groupOf(i) === gid && rule.key(i) === proj);
   el.querySelector('.ph-name').textContent = (rule.label && first) ? rule.label(first) : proj;
   // A duplicate set of photos or videos is decided with the eyes, not the
   // name: a Quick Look thumbnail in the header, click for a bigger look.
-  if (rule.thumb && first) {
+  if (rule.thumb && first && !noThumb.has(first.id)) {
     const img = document.createElement('img');
     img.className = 'ph-thumb';
     img.alt = '';
     img.loading = 'lazy';
     img.src = `/api/thumb?id=${encodeURIComponent(first.id)}&t=${TOKEN}`;
-    img.addEventListener('error', () => img.remove()); // no preview → icon only
+    // The error handler learns this file has no Quick Look preview and then
+    // used to throw that knowledge away with the element — and renderGroups
+    // destroys headers that fall out of `seen`, so broadening the filter
+    // re-forked qlmanage (10s timeout) for every one of them again.
+    img.addEventListener('error', () => { noThumb.add(first.id); img.remove(); });
     img.addEventListener('click', (e) => {
       e.stopPropagation();
       showThumbPreview(first, img);
@@ -970,13 +1001,19 @@ function updateProjectHeader(ph, c) {
   }
   // state is computed over everything the checkbox would touch, not just the
   // rows currently visible — otherwise it renders indeterminate forever
-  const selectableItems = clusterItems(c.gid, c.proj, c.rule).filter(i => clusterSelectable(i, c.rule));
+  const selectableItems = (c.all || clusterItems(c.gid, c.proj, c.rule)).filter(i => clusterSelectable(i, c.rule));
   const sel = selectableItems.filter(i => state.selection.has(i.id)).length;
   const check = ph.querySelector('input');
   check.checked = sel > 0 && sel === selectableItems.length;
   check.indeterminate = sel > 0 && sel < selectableItems.length;
   check.disabled = selectableItems.length === 0;
 }
+
+// Items whose Quick Look render failed once; asking again costs a process.
+const noThumb = new Set();
+
+// Write only when the value actually changed — see updateRow.
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
 
 function buildRow(item) {
   const row = document.createElement('div');
@@ -1070,32 +1107,47 @@ function updateRow(row, item, indent) {
   // ALWAYS shown on its own line underneath, clickable to open the file's
   // folder in Finder. Hiding the location bred distrust: users want to see
   // exactly which folder and file a row is talking about before touching it.
+  // Every write below is guarded. render() runs at 4 Hz for the whole visible
+  // list while a scan streams, and an unconditional textContent assignment
+  // replaces the text node and dirties layout even when the value is
+  // identical — which it is, for most rows, most ticks.
   const age = item.mtime ? '  ·  ' + fmtAge(item.mtime) : '';
   const loc = row.querySelector('.r-loc');
+  const pathEl = row.querySelector('.r-path');
   if (state.uiMode === 'normal') {
-    row.querySelector('.r-path').textContent = (item.why || '') + age;
+    setText(pathEl, (item.why || '') + age);
     loc.hidden = false;
     // LRM marks pin the leading "~/" in place: the element renders RTL so a
     // long path truncates at the START and keeps the file name visible
-    const shown = '‎' + item.display + '‎';
-    if (loc.textContent !== shown) loc.textContent = shown;
+    setText(loc, '‎' + item.display + '‎');
   } else {
-    row.querySelector('.r-path').textContent = item.display + age;
+    setText(pathEl, item.display + age);
     loc.hidden = true;
   }
 
   const statusEl = row.querySelector('.r-status');
-  if (item.status === 'scanning') statusEl.innerHTML = '<span class="spinner"></span>';
-  else if (item.status === 'queued') statusEl.textContent = 'queued…';
-  else if (item.status === 'deleting') statusEl.innerHTML = '<span class="spinner"></span> deleting';
-  else if (item.status === 'deleted') statusEl.textContent = 'deleted ✓';
-  else if (item.status === 'gone') statusEl.textContent = 'removed';
-  else if (item.status === 'denied') statusEl.textContent = '🔒 no access';
-  else if (item.status === 'error') statusEl.textContent = '⚠ ' + (item.error || 'failed');
-  else if (item.displayOnly) statusEl.textContent = 'read-only';
-  else statusEl.textContent = item.files ? fmtCount(item.files) + (item.files === 1 ? ' file' : ' files') : '';
+  const spinning = item.status === 'scanning' || item.status === 'deleting';
+  if (spinning) {
+    // rewriting innerHTML recreated the element and restarted its animation
+    // four times a second, so the spinner never actually spun
+    const want = item.status === 'deleting' ? ' deleting' : '';
+    if (!statusEl.firstElementChild?.classList.contains('spinner') || statusEl.lastChild?.nodeValue !== want) {
+      statusEl.innerHTML = '<span class="spinner"></span>';
+      if (want) statusEl.appendChild(document.createTextNode(want));
+    }
+  } else {
+    const text = item.status === 'queued' ? 'queued…'
+      : item.status === 'deleted' ? 'deleted ✓'
+      : item.status === 'gone' ? 'removed'
+      : item.status === 'denied' ? '🔒 no access'
+      : item.status === 'error' ? '⚠ ' + (item.error || 'failed')
+      : item.displayOnly ? 'read-only'
+      : item.files ? fmtCount(item.files) + (item.files === 1 ? ' file' : ' files') : '';
+    if (statusEl.firstElementChild) statusEl.textContent = text;
+    else setText(statusEl, text);
+  }
 
-  row.querySelector('.r-size').textContent = fmtBytes(item.bytes);
+  setText(row.querySelector('.r-size'), fmtBytes(item.bytes));
 }
 
 function renderSelectionBar() {
